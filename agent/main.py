@@ -58,10 +58,12 @@ from pipecat.services.llm_service import FunctionCallParams
 from pipecat.runner.run import main as pipecat_main
 
 from agent.config import settings, validate_settings
+import time
 from agent.services.api_client import APIClient
 from agent.prompts import get_system_prompt
 from agent.tools.booking_tools import BookingTools
 from agent.utils.logger import get_logger
+from agent.health import configure_health, patch_uvicorn_with_health
 
 logger = get_logger(__name__)
 
@@ -431,9 +433,16 @@ if __name__ == "__main__":
 
     # Order is critical:
     #   1. create_app() — auth, config fetch, tool validation, AppConfig freeze
-    #   2. pipecat_main() — starts uvicorn + WebRTC server, calls bot() per connection
+    #   2. configure_health() — set up health config
+    #   3. patch_uvicorn_with_health() — intercept uvicorn.run to add endpoint
+    #   4. pipecat_main() — starts uvicorn + WebRTC server, calls bot() per connection
     #
     # AGENT_API_TOKEN in .env is your Pipecat Cloud key — unused locally.
     # It will authenticate your agent with Pipecat Cloud on cloud deployment.
     asyncio.run(create_app())
+    
+    # Configure and patch uvicorn to add health endpoint before starting
+    configure_health(_app_config)
+    patch_uvicorn_with_health()
+    
     pipecat_main()
