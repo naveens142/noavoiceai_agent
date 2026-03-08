@@ -1,0 +1,116 @@
+## Architecture Alignment with Official Pipecat Pattern
+
+### Changes Made to main.py
+
+#### 1. **Service Creation Order (Follows Official Pattern)**
+```
+✅ OLD: Register handlers → Create context
+✅ NEW: Create LLM → Create TTS → Create context → Create aggregators → Register handlers
+```
+
+The new order matches the official Pipecat example:
+1. Create individual services (LLM, STT, TTS)
+2. Create LLMContext with tools
+3. Create aggregators (user_aggregator, assistant_aggregator)
+4. Register tool handlers on LLM
+5. Create pipeline
+6. Add event handlers
+
+#### 2. **Greeting Mechanism (Follows Official Pattern)**
+```
+✅ OLD: TTSSpeakFrame(first_message) — static audio playback
+✅ NEW: LLMRunFrame() — LLM generates greeting
+```
+
+**Official Example:**
+```python
+@transport.event_handler("on_client_connected")
+async def on_client_connected(transport, client):
+    messages.append({"role": "system", "content": "Say hello..."})
+    await task.queue_frames([LLMRunFrame()])
+```
+
+**Our New Pattern:**
+```python
+@transport.event_handler("on_client_connected")
+async def on_client_connected(transport, client):
+    current_messages = context.get_messages()
+    current_messages.append({"role": "system", "content": "Please say hello..."})
+    context.set_messages(current_messages)
+    await task.queue_frames([LLMRunFrame()])
+```
+
+**Why This Matters:**
+- The LLM actually *generates* the greeting (not static audio)
+- The LLM is engaged and warmed up for subsequent tool calls
+- Follows the exact pattern from official Pipecat documentation
+- Tools are available immediately after greeting
+
+#### 3. **Tool Handler Registration**
+```
+✅ Now happens AFTER context and aggregators are created
+✅ Handlers are registered on already-initialized LLM service
+✅ Tools are already in context via LLMContext(tools=raw_tools)
+```
+
+**Correct Sequence:**
+```python
+# 1. Create LLM service
+llm = OpenAILLMService(...)
+
+# 2. Create context with tool schemas
+context = LLMContext(messages=context_messages, tools=raw_tools)
+
+# 3. Create aggregators linking context
+user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context, ...)
+
+# 4. Register handlers on LLM
+_register_tool_handlers(llm, _booking_tools)  # ← Last
+```
+
+#### 4. **Import Changes**
+Added `LLMRunFrame` to top imports:
+```python
+from pipecat.frames.frames import TTSSpeakFrame, LLMRunFrame
+```
+
+---
+
+### Why These Changes Matter for Tools
+
+**Previous Issue:** Tools weren't being called
+- The agent was playing static greeting
+- LLM might not have been triggered to use tools
+- Service initialization order might have been confusing framework
+
+**New Approach:**
+1. ✅ LLM is created → context with tools → aggregators → handlers
+2. ✅ Client connects → LLM explicitly triggered via `LLMRunFrame()`
+3. ✅ LLM is warm and ready to call tools
+4. ✅ Tool handlers are registered and available
+
+---
+
+### What to Test
+
+1. **Agent startup** - should show tool registration in logs
+2. **Client connection** - should trigger LLMRunFrame, LLM generates greeting
+3. **Tool calls** - when user asks for appointments, LLM should call tools
+
+Check logs for:
+```
+✅ All booking tool handlers registered individually with LLM
+✅ CLIENT CONNECTED - KICKING OFF CONVERSATION
+✅ Queuing LLMRunFrame to initiate greeting
+🔴 >>>>>> HANDLER CALLED FOR: get_available_slots  ← Should appear when calling tools
+```
+
+---
+
+### Compatibility with Official Pipecat
+
+This refactoring brings your implementation in line with the official Pipecat examples while maintaining your custom:
+- BookingTools system
+- APIClient integration  
+- Comprehensive logging and diagnostics
+- Tool schemas and handlers

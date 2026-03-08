@@ -1,0 +1,37 @@
+# Core Pipecat (with Deepgram and OpenAI extras)
+pipecat-ai[deepgram,openai]==0.0.104
+
+# LLM & AI
+openai>=1.0.0
+
+# Audio/Voice
+deepgram-sdk>=3.0.0
+daily-python>=0.10.0
+
+# Async & Networking (removed pinned versions)
+httpx
+websockets
+
+# Data
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Database
+sqlalchemy>=2.0.0
+asyncpg
+
+# Environment
+python-dotenv
+
+# Logging & Monitoring
+python-json-logger
+sentry-sdk
+
+# Utilities
+requests
+
+# Development
+pytest
+pytest-asyncio
+black
+flake8
