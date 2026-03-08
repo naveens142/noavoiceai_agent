@@ -120,14 +120,14 @@ BOOKING_TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "reschedule_appointment",
-            "description": "Reschedule an existing appointment to a new date/time.",
+            "description": "Reschedule an existing appointment to a NEW DATE AND NEW TIME. IMPORTANT: You MUST provide a specific time in the new_start field. If only a date is provided without a time, the system will keep the old time. Always call get_available_slots FIRST to show the patient available times, wait for them to choose a specific time, then reschedule to that exact date and time.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "email":     {"type": "string", "format": "email"},
                     "new_start": {
                         "type": "string",
-                        "description": "New date/time in natural language, e.g. 'next monday at 2pm'",
+                        "description": "REQUIRED: New date AND time in natural language, e.g. '11 March at 2pm' or 'next Monday at 3:30pm'. Must include both date and specific time. If no time is provided, old time will be kept.",
                     },
                     "reason":   {"type": "string"},
                     "timezone": {"type": "string", "default": "Asia/Kolkata"},
@@ -245,6 +245,22 @@ class BookingTools:
         try:
             result = await self.api.book_appointment(params)
             logger.critical(f"✅ _book_appointment API returned: {type(result)}")
+            
+            response_data = result.get("data", str(result)) if isinstance(result, dict) else str(result)
+            
+            # CRITICAL: Check the data field for hidden error indicators
+            # Backend returns status: "success" even when Cal.com API fails
+            # Errors are hidden in the data field with indicators: ❌, Invalid, Error, Failed
+            error_indicators = ["❌", "Invalid", "Error", "Failed", "failed", "error", "unable"]
+            has_error = any(indicator in str(response_data) for indicator in error_indicators)
+            
+            if has_error:
+                logger.error(f"❌ BOOKING FAILED: {response_data}")
+                return tool_error(
+                    f"Booking failed: {response_data}",
+                    "BOOKING_FAILED"
+                )
+            
             return tool_success("Appointment booked successfully", result)
         except Exception as e:
             logger.error(f"Booking error: {e}", exc_info=True)
@@ -267,9 +283,48 @@ class BookingTools:
     async def _reschedule_appointment(self, params: Dict) -> Dict:
         logger.info(f"   📞 _reschedule_appointment() params: {params}")
         try:
+            email = params.get("email")
+            
+            # Step 1: Call the reschedule API
             result = await self.api.reschedule_appointment(params)
             logger.critical(f"✅ _reschedule_appointment API returned: {type(result)}")
-            return tool_success("Appointment rescheduled successfully", result)
+            
+            response_data = result.get("data", str(result)) if isinstance(result, dict) else str(result)
+            
+            # CRITICAL: Check the data field for hidden error indicators
+            # Backend returns status: "success" even when Cal.com API fails
+            # Errors are hidden in the data field with indicators: ❌, Invalid, Error, Failed
+            error_indicators = ["❌", "Invalid", "Error", "Failed", "failed", "error", "unable"]
+            has_error = any(indicator in str(response_data) for indicator in error_indicators)
+            
+            logger.critical(f"Reschedule response data: {response_data}")
+            logger.critical(f"Has error indicator: {has_error}")
+            
+            if has_error:
+                # Data field contains error message — treat as failure
+                logger.error(f"❌ RESCHEDULE FAILED: {response_data}")
+                return tool_error(
+                    f"Reschedule failed: {response_data}",
+                    "RESCHEDULE_FAILED"
+                )
+            
+            # Step 2: CRITICAL - Immediately fetch the current booking details
+            # This ensures we get the ACTUAL current booking ID from the source of truth
+            # (Cal.com may have changed IDs during reschedule, and the reschedule response
+            # may not include the new ID)
+            current_booking = await self.api.get_booking(email)
+            logger.info(f"Fetched current booking after reschedule: {current_booking}")
+            
+            # Create enhanced response with CURRENT booking details (not just reschedule response)
+            enhanced_response = {
+                "status": "success",
+                "reschedule_confirmation": response_data,
+                "current_booking": current_booking,  # This has the actual current ID
+                "note": "✅ Appointment rescheduled successfully. Current booking ID updated. If you need to cancel later, we will look it up by your email to ensure we cancel the correct appointment.",
+            }
+            
+            logger.critical(f"Enhanced reschedule response: {enhanced_response}")
+            return tool_success("Appointment rescheduled successfully", enhanced_response)
         except Exception as e:
             logger.error(f"Reschedule error: {e}", exc_info=True)
             return tool_error("Reschedule failed. Please try again.", "RESCHEDULE_FAILED")
@@ -277,9 +332,55 @@ class BookingTools:
     async def _cancel_appointment(self, params: Dict) -> Dict:
         logger.info(f"   📞 _cancel_appointment() params: {params}")
         try:
+            email = params.get("email")
+            
+            # CRITICAL: Verify current booking exists before cancelling
+            # This ensures we cancel the LATEST booking (post-reschedule) not an old one
+            current_booking = await self.api.get_booking(email)
+            if not current_booking:
+                logger.error(f"No current booking found for {email}")
+                return tool_error(
+                    "Could not find an active appointment for this email. It may have already been cancelled.",
+                    "BOOKING_NOT_FOUND"
+                )
+            
+            # Log the booking ID we're about to cancel for debugging
+            logger.critical(f"🔴 ABOUT TO CANCEL BOOKING: {current_booking}")
+            logger.info(f"Current booking details: {current_booking}")
+            
             result = await self.api.cancel_appointment(params)
             logger.critical(f"✅ _cancel_appointment API returned: {type(result)}")
-            return tool_success("Appointment cancelled successfully", result)
+            
+            cancel_response = result if isinstance(result, dict) else {"data": str(result)}
+            response_data = cancel_response.get("data", "")
+            
+            # CRITICAL: Check the data field for hidden error indicators
+            # Backend returns status: "success" even when Cal.com API fails
+            # Errors are hidden in the data field with indicators: ❌, Invalid, Error, Failed
+            error_indicators = ["❌", "Invalid", "Error", "Failed", "failed", "error", "unable"]
+            has_error = any(indicator in str(response_data) for indicator in error_indicators)
+            
+            logger.critical(f"Cancel response data: {response_data}")
+            logger.critical(f"Has error indicator: {has_error}")
+            
+            if has_error:
+                # Data field contains error message — treat as failure
+                logger.error(f"❌ CANCELLATION FAILED: {response_data}")
+                return tool_error(
+                    f"Cancellation failed: {response_data}",
+                    "CANCEL_FAILED"
+                )
+            
+            # No error indicators found — cancellation succeeded
+            enhanced_response = {
+                "status": "success",
+                "original_response": cancel_response,
+                "cancelled_booking": current_booking,
+                "note": f"✅ Appointment successfully cancelled.",
+            }
+            
+            logger.critical(f"✅ CANCELLATION SUCCESSFUL for booking: {current_booking}")
+            return tool_success("Appointment cancelled successfully", enhanced_response)
         except Exception as e:
             logger.error(f"Cancel error: {e}", exc_info=True)
             return tool_error("Cancellation failed. Please try again.", "CANCEL_FAILED")

@@ -1,23 +1,33 @@
+# agent/services/api_client.py
 """
-api_client.py
-Production API Client
-Communicates with FastAPI backend
+Production API Client — communicates with FastAPI backend.
 
-FIXES APPLIED:
-  1. Added open() / close() methods so the client can live for the entire
-     process lifetime without being tied to an `async with` block.
-     The original code used `async with api_client` during startup which
-     closed the underlying httpx.AsyncClient before any runtime tool calls
-     could use it — causing every tool call to raise "Client not initialized".
-  2. Retry decorator is preserved; exponential backoff unchanged.
-  3. `async with` context manager still works for one-off usage.
+Auth flow:
+  - login() calls POST /auth/login with email+password → short-lived JWT
+  - JWT is stored on the client and injected into every request header
+  - If JWT expires mid-session, _make_request() auto re-authenticates once
+  - AGENT_API_TOKEN (Pipecat Cloud key) is unrelated — not used here
+
+Lifecycle:
+  Long-lived (one per bot() session):
+      client = APIClient()
+      await client.open()
+      await client.login()
+      # ... use for session lifetime ...
+      await client.close()   # always in a finally block
+
+  Short-lived / one-off (tests, startup validation):
+      async with APIClient() as client:
+          await client.login()
+          data = await client.get_agent_config()
 """
 
-import httpx
 import asyncio
 import json
-from typing import Dict, List, Optional, Any
 from functools import wraps
+from typing import Any, Dict, List, Optional
+
+import httpx
 
 from agent.config import settings
 from agent.utils.logger import get_logger
@@ -25,24 +35,20 @@ from agent.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-# =========================================================
-# EXCEPTIONS
-# =========================================================
+# ─── Exceptions ───────────────────────────────────────────────────────────────
 
 class APIClientError(Exception):
-    """Non-retryable API client error (4xx, bad config, …)"""
+    """Non-retryable error (4xx, bad config, auth failure)."""
 
 
 class RetryableError(APIClientError):
-    """Retryable error (5xx, timeouts, transient network issues)"""
+    """Retryable error (5xx, timeouts, transient network issues)."""
 
 
-# =========================================================
-# RETRY DECORATOR
-# =========================================================
+# ─── Retry decorator ──────────────────────────────────────────────────────────
 
 def retry_on_error(max_retries: int = 3, delay: int = 2):
-    """Retry with exponential backoff on RetryableError."""
+    """Exponential backoff retry on RetryableError only."""
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
@@ -50,84 +56,70 @@ def retry_on_error(max_retries: int = 3, delay: int = 2):
             for attempt in range(max_retries):
                 try:
                     return await func(*args, **kwargs)
-                except RetryableError as e:
-                    last_error = e
+                except RetryableError as exc:
+                    last_error = exc
                     if attempt < max_retries - 1:
-                        wait_time = delay * (2 ** attempt)
+                        wait = delay * (2 ** attempt)
                         logger.warning(
-                            f"Attempt {attempt + 1}/{max_retries} failed, "
-                            f"retrying in {wait_time}s: {e}"
+                            "Attempt %d/%d failed, retrying in %ds: %s",
+                            attempt + 1, max_retries, wait, exc,
                         )
-                        await asyncio.sleep(wait_time)
+                        await asyncio.sleep(wait)
                     else:
-                        logger.error(f"All {max_retries} attempts failed: {e}")
+                        logger.error("All %d attempts failed: %s", max_retries, exc)
             raise last_error
         return wrapper
     return decorator
 
 
-# =========================================================
-# API CLIENT
-# =========================================================
+# ─── API Client ───────────────────────────────────────────────────────────────
 
 class APIClient:
     """
     Async HTTP client for the Pipecat agent backend.
 
-    Lifecycle
-    ---------
-    Long-lived (recommended for production):
-        client = APIClient()
-        await client.open()
-        await client.login()
-        # … use for the process lifetime …
-        await client.close()
-
-    Short-lived / one-off (still supported):
-        async with APIClient() as client:
-            await client.login()
-            data = await client.get_agent_config()
+    One instance per bot() session — fully isolated auth state.
+    Never share an instance across sessions.
     """
 
     def __init__(self):
-        self.base_url        = settings.api_base_url.rstrip("/")
-        self.api_key         = settings.api_key
-        self.agent_email     = settings.agent_email
-        self.agent_password  = settings.agent_password
-        self.timeout         = httpx.Timeout(settings.api_timeout)
-        self.verify_ssl      = settings.verify_ssl
+        self.base_url = settings.api_base_url.rstrip("/")
+        self.agent_email = settings.agent_email
+        self.agent_password = settings.agent_password
+        self.timeout = httpx.Timeout(settings.api_timeout)
+        self.verify_ssl = settings.verify_ssl
         self.access_token: Optional[str] = None
         self._client: Optional[httpx.AsyncClient] = None
         self._base_headers = {
             "Content-Type": "application/json",
-            "User-Agent":   f"PipecatAgent/{settings.agent_id}",
+            "User-Agent": f"PipecatAgent/{settings.agent_id}",
         }
-        logger.info(f"APIClient created: {self.base_url} (SSL_VERIFY={self.verify_ssl})")
+        logger.debug("APIClient created: %s (SSL_VERIFY=%s)", self.base_url, self.verify_ssl)
 
-    # ------------------------------------------------------------------
-    # Lifecycle helpers
-    # ------------------------------------------------------------------
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def open(self) -> None:
-        """Open the underlying HTTP connection pool. Call once at startup."""
+        """Open the underlying HTTP connection pool. Call once before any requests."""
         if self._client is not None:
-            return  # already open
+            return  # already open — idempotent
         self._client = httpx.AsyncClient(
             timeout=self.timeout,
             headers=self._base_headers,
             verify=self.verify_ssl,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+            ),
         )
-        logger.debug("APIClient: httpx.AsyncClient opened")
+        logger.debug("APIClient: connection pool opened")
 
     async def close(self) -> None:
-        """Close the connection pool. Call on process shutdown."""
+        """Close the connection pool. Always call in a finally block."""
         if self._client:
             await self._client.aclose()
             self._client = None
-            logger.debug("APIClient: httpx.AsyncClient closed")
+            logger.debug("APIClient: connection pool closed")
 
-    # Context-manager support (for one-off usage or tests)
     async def __aenter__(self):
         await self.open()
         return self
@@ -135,111 +127,123 @@ class APIClient:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
-    # ------------------------------------------------------------------
-    # Auth header management
-    # ------------------------------------------------------------------
+    # ── Auth helpers ──────────────────────────────────────────────────────────
 
     def _apply_auth_header(self) -> None:
-        """Inject the current JWT (or static API key) into the live client."""
+        """Inject current JWT into the live client headers."""
         if self._client is None:
             return
         if self.access_token:
             self._client.headers["Authorization"] = f"Bearer {self.access_token}"
-        elif self.api_key:
-            self._client.headers["Authorization"] = f"Bearer {self.api_key}"
 
     def _ensure_open(self) -> None:
         if self._client is None:
             raise APIClientError(
-                "APIClient is not open. Call `await client.open()` before making requests, "
-                "or use the client as an async context manager."
+                "APIClient is not open. "
+                "Call `await client.open()` before making requests."
             )
 
-    # ------------------------------------------------------------------
-    # Low-level request
-    # ------------------------------------------------------------------
+    # ── Low-level request ─────────────────────────────────────────────────────
 
     async def _make_request(
         self,
         method: str,
         endpoint: str,
+        _retry_auth: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """
         Execute an HTTP request with structured error handling.
 
-        Raises
-        ------
-        RetryableError  — 5xx / timeout / connect errors
-        APIClientError  — 4xx / unexpected errors
+        Automatic JWT refresh:
+          On 401, re-authenticates once and retries the request.
+          This handles mid-session token expiry transparently.
+
+        Raises:
+          RetryableError  — 5xx / timeout / connect errors (triggers retry decorator)
+          APIClientError  — 4xx / unexpected errors (no retry)
         """
         self._ensure_open()
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
 
-        try:
-            # Build full URL with params for logging
-            full_url = url
-            if "params" in kwargs:
-                params_str = "&".join([f"{k}={v}" for k, v in kwargs["params"].items()])
-                full_url = f"{url}?{params_str}"
-            
-            logger.info(f"\n🌐 API REQUEST")
-            logger.info(f"   Method:  {method}")
-            logger.info(f"   URL:     {full_url}")
-            if "json" in kwargs:
-                logger.info(f"   Body:    {json.dumps(kwargs['json'], indent=2)}")
-            if "params" in kwargs:
-                logger.info(f"   Params:  {kwargs['params']}")
+        # Debug logging — redact sensitive fields in production if needed
+        log_url = url
+        if "params" in kwargs:
+            params_str = "&".join(f"{k}={v}" for k, v in kwargs["params"].items())
+            log_url = f"{url}?{params_str}"
 
+        logger.info("→ %s %s", method, log_url)
+        if "json" in kwargs:
+            logger.debug("  body: %s", json.dumps(kwargs["json"], indent=2))
+
+        try:
             response = await self._client.request(method, url, **kwargs)
+
+            # ── Auto re-auth on 401 (JWT expired mid-session) ────────────────
+            if response.status_code == 401 and not _retry_auth:
+                logger.warning("401 received — JWT likely expired, re-authenticating")
+                self.access_token = None
+                await self.login()
+                return await self._make_request(
+                    method, endpoint, _retry_auth=True, **kwargs
+                )
+
             response.raise_for_status()
 
             data = response.json() if response.content else {}
-            logger.info(f"✅ API RESPONSE: {response.status_code}")
-            logger.info(f"   Data: {json.dumps(data, indent=2) if data else '(empty)'}\n")
+            logger.info("← %s %s", response.status_code, endpoint)
+            logger.debug("  response: %s", json.dumps(data, indent=2) if data else "(empty)")
             return data
 
-        except httpx.HTTPStatusError as e:
-            msg = f"HTTP {e.response.status_code}: {e.response.text}"
-            logger.error(f"❌ API ERROR — {method} {url} — {msg}")
-            if e.response.status_code >= 500:
+        except httpx.HTTPStatusError as exc:
+            msg = f"HTTP {exc.response.status_code}: {exc.response.text}"
+            logger.error("✗ %s %s — %s", method, url, msg)
+            if exc.response.status_code >= 500:
                 raise RetryableError(msg)
             raise APIClientError(msg)
 
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
-            msg = f"Connection error: {e}"
-            logger.error(f"❌ API CONNECTION ERROR — {method} {url} — {msg}")
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            msg = f"Connection error: {exc}"
+            logger.error("✗ %s %s — %s", method, url, msg)
             raise RetryableError(msg)
 
-        except Exception as e:
-            msg = f"Unexpected error: {e}"
-            logger.error(f"❌ API UNEXPECTED ERROR — {method} {url} — {msg}")
+        except (APIClientError, RetryableError):
+            raise  # already classified, don't wrap again
+
+        except Exception as exc:
+            msg = f"Unexpected error: {exc}"
+            logger.error("✗ %s %s — %s", method, url, msg, exc_info=True)
             raise APIClientError(msg)
 
-    # ------------------------------------------------------------------
-    # Authentication
-    # ------------------------------------------------------------------
+    # ── Authentication ────────────────────────────────────────────────────────
 
     @retry_on_error(max_retries=3, delay=2)
     async def login(self) -> Dict[str, Any]:
         """
-        Authenticate with email + password and store the JWT token.
+        Authenticate with email + password → store JWT for this session.
 
-        POST /auth/login  →  {"access_token": "...", "token_type": "bearer"}
+        POST /auth/login → {"access_token": "...", "token_type": "bearer"}
+
+        Called:
+          - Once at session start in bot()
+          - Automatically by _make_request() if JWT expires mid-session
         """
         if not self.agent_email or not self.agent_password:
             raise APIClientError(
-                "AGENT_EMAIL and AGENT_PASSWORD must be set in environment / settings."
+                "AGENT_EMAIL and AGENT_PASSWORD must be set in .env"
             )
         self._ensure_open()
 
         url = f"{self.base_url}/auth/login"
-        logger.info(f"🔐 Authenticating agent ({self.agent_email}) → POST {url}")
+        logger.info("Authenticating: POST %s (%s)", url, self.agent_email)
 
         try:
             response = await self._client.post(
                 url,
-                json={"email": self.agent_email, "password": self.agent_password},
+                json={
+                    "email": self.agent_email,
+                    "password": self.agent_password,
+                },
             )
             response.raise_for_status()
             data = response.json()
@@ -251,126 +255,109 @@ class APIClient:
                 )
 
             self._apply_auth_header()
-            logger.info(f"✅ Auth OK — token_type={data.get('token_type', '?')}")
+            logger.info("Auth OK — token_type=%s", data.get("token_type", "?"))
             return data
 
-        except httpx.HTTPStatusError as e:
+        except httpx.HTTPStatusError as exc:
             raise APIClientError(
-                f"Login failed — HTTP {e.response.status_code}: {e.response.text}"
+                f"Login failed — HTTP {exc.response.status_code}: {exc.response.text}"
             )
         except APIClientError:
             raise
-        except Exception as e:
-            raise APIClientError(f"Login error: {e}")
+        except Exception as exc:
+            raise APIClientError(f"Login error: {exc}")
 
-    # ------------------------------------------------------------------
-    # Agent config
-    # ------------------------------------------------------------------
+    # ── Agent config ──────────────────────────────────────────────────────────
 
     @retry_on_error(max_retries=3, delay=2)
     async def get_agent_config(self) -> Dict:
         """GET /agents/{agent_id}"""
-        logger.info(f"Fetching agent config for {settings.agent_id}")
+        logger.info("Fetching agent config: %s", settings.agent_id)
         data = await self._make_request("GET", f"/agents/{settings.agent_id}")
-        logger.info(f"Agent config: name={data.get('name')}")
+        logger.info("Agent config: name=%s", data.get("name"))
         return data
 
     @retry_on_error(max_retries=3, delay=2)
     async def get_available_tools(self) -> List[Dict]:
         """GET /agents/tools/available"""
         data = await self._make_request("GET", "/agents/tools/available")
-        logger.info(f"Available tools: {len(data)}")
+        logger.info("Available tools: %d", len(data))
         return data
 
-    # ------------------------------------------------------------------
-    # Appointment endpoints
-    # ------------------------------------------------------------------
+    # ── Appointment endpoints ─────────────────────────────────────────────────
 
     @retry_on_error(max_retries=3, delay=2)
     async def get_available_slots(
-        self, date: str, timezone: str = "Asia/Kolkata"
+        self,
+        date: str,
+        timezone: str = "Asia/Kolkata",
     ) -> Dict:
-        """GET /appointments/available-slots"""
-        logger.critical(f"\n{'='*70}")
-        logger.critical(f"🔴 API_CLIENT.GET_AVAILABLE_SLOTS CALLED")
-        logger.critical(f"{'='*70}")
-        logger.info(f"Fetching slots — date={date} tz={timezone}")
-        data = await self._make_request(
+        """GET /appointments/available-slots?date=&timezone="""
+        logger.info("Fetching slots — date=%s tz=%s", date, timezone)
+        return await self._make_request(
             "GET",
             "/appointments/available-slots",
             params={"date": date, "timezone": timezone},
         )
-        logger.critical(f"✅ Slots API response received: {type(data)}")
-        logger.info(f"Slots response: {data}")
-        return data
 
     @retry_on_error(max_retries=3, delay=2)
     async def book_appointment(self, booking_data: Dict) -> Dict:
         """POST /appointments/book"""
         logger.info(
-            f"📅 Booking appointment — "
-            f"name={booking_data.get('name')} "
-            f"email={booking_data.get('email')} "
-            f"time={booking_data.get('datetime_natural')}"
+            "Booking appointment — name=%s email=%s time=%s",
+            booking_data.get("name"),
+            booking_data.get("email"),
+            booking_data.get("datetime_natural"),
         )
-        data = await self._make_request(
+        return await self._make_request(
             "POST", "/appointments/book", json=booking_data
         )
-        logger.info(f"✅ Appointment booked: {data}")
-        return data
 
     @retry_on_error(max_retries=3, delay=2)
     async def reschedule_appointment(self, reschedule_data: Dict) -> Dict:
         """POST /appointments/reschedule"""
         logger.info(
-            f"🔄 Rescheduling — "
-            f"email={reschedule_data.get('email')} "
-            f"new_start={reschedule_data.get('new_start')}"
+            "Rescheduling — email=%s new_start=%s",
+            reschedule_data.get("email"),
+            reschedule_data.get("new_start"),
         )
-        data = await self._make_request(
+        return await self._make_request(
             "POST", "/appointments/reschedule", json=reschedule_data
         )
-        logger.info(f"✅ Rescheduled: {data}")
-        return data
 
     @retry_on_error(max_retries=3, delay=2)
     async def cancel_appointment(self, cancel_data: Dict) -> Dict:
         """POST /appointments/cancel"""
         logger.info(
-            f"❌ Cancelling — email={cancel_data.get('email')} "
-            f"reason={cancel_data.get('reason')}"
+            "Cancelling — email=%s reason=%s",
+            cancel_data.get("email"),
+            cancel_data.get("reason"),
         )
-        data = await self._make_request(
+        return await self._make_request(
             "POST", "/appointments/cancel", json=cancel_data
         )
-        logger.info(f"✅ Cancelled: {data}")
-        return data
 
     @retry_on_error(max_retries=3, delay=2)
     async def get_booking(self, email: str) -> Optional[Dict]:
-        """GET /appointments/booking?email=..."""
-        logger.info(f"🔍 Get booking — email={email}")
+        """GET /appointments/booking?email="""
+        logger.info("Get booking — email=%s", email)
         try:
-            data = await self._make_request(
+            return await self._make_request(
                 "GET",
                 "/appointments/booking",
                 params={"email": email},
             )
-            logger.info(f"✅ Booking found: {data}")
-            return data
-        except APIClientError as e:
-            # 404 means no booking exists — not an error worth retrying
-            logger.warning(f"⚠️  Booking not found for {email}: {e}")
+        except APIClientError as exc:
+            # 404 = no booking exists — not an error worth propagating
+            logger.info("No booking found for %s: %s", email, exc)
             return None
 
-    # ------------------------------------------------------------------
-    # Session / conversation history (optional)
-    # ------------------------------------------------------------------
+    # ── Session / conversation history ────────────────────────────────────────
 
     @retry_on_error(max_retries=3, delay=2)
     async def save_call_message(self, message_data: Dict) -> Dict:
         """POST /sessions/{session_id}/messages"""
-        logger.debug(f"Saving message: role={message_data.get('role')}")
+        logger.debug("Saving message: role=%s", message_data.get("role"))
         return await self._make_request(
             "POST",
             f"/sessions/{message_data['session_id']}/messages",
@@ -383,15 +370,17 @@ class APIClient:
 
     @retry_on_error(max_retries=3, delay=2)
     async def get_conversation_history(
-        self, caller_id: str, limit: int = 10
+        self,
+        caller_id: str,
+        limit: int = 10,
     ) -> List[Dict]:
         """GET /callers/{caller_id}/messages"""
-        logger.info(f"Fetching history — caller={caller_id} limit={limit}")
+        logger.info("Fetching history — caller=%s limit=%d", caller_id, limit)
         data = await self._make_request(
             "GET",
             f"/callers/{caller_id}/messages",
             params={"limit": limit},
         )
         messages = data if isinstance(data, list) else data.get("messages", [])
-        logger.info(f"History: {len(messages)} messages")
+        logger.info("History: %d messages", len(messages))
         return messages
