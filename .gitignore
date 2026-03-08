@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.pyo
+*.pyd
+*.pyc
+*.pdb
+
+# Virtual environments
+venv/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Test outputs
+*.coverage
+*.pytest_cache/
+
+# Docker
+*.dockerfile
+Dockerfile
+
+docker-compose.yml
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build
+build/
+dist/
+
+# Config
+config/dev/
+config/prod/
+config/staging/
+
+# Misc
+*.swp
+*.bak
+
+# Ignore notebooks
+*.ipynb
+
+# Ignore test cache
+pytest_cache/
+
+# Ignore egg-info
+noavoice_pipecat_agent.egg-info/
