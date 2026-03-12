@@ -23,11 +23,9 @@ logs/
 *.coverage
 *.pytest_cache/
 
-# Docker
-*.dockerfile
-Dockerfile
-
-docker-compose.yml
+# Docker - keep Dockerfile for Cloud Run deployment
+# *.dockerfile
+# Dockerfile
 
 # VS Code
 .vscode/
