@@ -11,8 +11,8 @@ services:
     repo: your-github-username/noavoice_pipecat-agent
     branch: main
     
-    # Build and start commands
-    buildCommand: pip install -r requirements.txt
+    # Build and start commands - use pip not poetry
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python bot_runner.py
     
     # Environment variables (also set in Render dashboard)
