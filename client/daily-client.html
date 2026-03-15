@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NoaVoice Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg:       #0d0d0f;
+            --surface:  #141417;
+            --surface2: #1c1c21;
+            --border:   #2a2a32;
+            --accent:   #7c6aff;
+            --accent2:  #a78bfa;
+            --green:    #22d3a0;
+            --red:      #ff5f7e;
+            --yellow:   #fbbf24;
+            --text:     #f0f0f5;
+            --muted:    #6b6b80;
+            --radius:   12px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Syne', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex; align-items: center; justify-content: center;
+            padding: 20px;
+        }
+
+        .app {
+            width: 100%; max-width: 480px;
+            display: flex; flex-direction: column;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 20px; overflow: hidden;
+            box-shadow: 0 40px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(124,106,255,0.08);
+        }
+
+        /* ── Header ── */
+        .header {
+            padding: 20px 22px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between;
+            background: linear-gradient(135deg, rgba(124,106,255,0.07) 0%, transparent 60%);
+        }
+
+        .header-left { display: flex; align-items: center; gap: 12px; }
+
+        .agent-avatar {
+            width: 40px; height: 40px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; flex-shrink: 0; position: relative;
+        }
+
+        .agent-avatar::after {
+            content: ''; position: absolute; bottom: 1px; right: 1px;
+            width: 10px; height: 10px; border-radius: 50%;
+            background: var(--green); border: 2px solid var(--surface);
+            opacity: 0; transition: opacity 0.3s;
+        }
+
+        .agent-avatar.online::after { opacity: 1; }
+
+        .agent-info h1 { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; }
+        .agent-info p  { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; margin-top: 1px; }
+
+        .status-pill {
+            display: flex; align-items: center; gap: 6px;
+            padding: 5px 10px; border-radius: 20px;
+            border: 1px solid var(--border);
+            font-size: 11px; font-family: 'DM Mono', monospace;
+            color: var(--muted); background: var(--surface2); transition: all 0.3s;
+        }
+
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); transition: all 0.3s; }
+
+        .status-pill.connected  { border-color: rgba(34,211,160,0.3); color: var(--green); }
+        .status-pill.connected .status-dot  { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pdot 2s infinite; }
+        .status-pill.connecting { border-color: rgba(251,191,36,0.3); color: var(--yellow); }
+        .status-pill.connecting .status-dot { background: var(--yellow); animation: pdot 1s infinite; }
+        .status-pill.error      { border-color: rgba(255,95,126,0.3); color: var(--red); }
+        .status-pill.error .status-dot { background: var(--red); }
+
+        @keyframes pdot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+
+        /* ── Chat ── */
+        .chat-area {
+            height: 340px; overflow-y: auto;
+            padding: 18px 18px 10px;
+            display: flex; flex-direction: column; gap: 13px;
+            scroll-behavior: smooth;
+        }
+
+        .chat-area::-webkit-scrollbar { width: 4px; }
+        .chat-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+        .chat-empty {
+            flex: 1; display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            gap: 10px; color: var(--muted); padding: 40px 0;
+        }
+
+        .chat-empty-icon { font-size: 30px; opacity: 0.35; }
+        .chat-empty p    { font-size: 12px; font-family: 'DM Mono', monospace; }
+
+        .message {
+            display: flex; flex-direction: column; gap: 3px;
+            animation: msgin 0.2s ease-out;
+        }
+
+        @keyframes msgin { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+
+        .message.user { align-items: flex-end; }
+        .message.bot  { align-items: flex-start; }
+
+        .msg-label { font-size: 10px; font-family: 'DM Mono', monospace; color: var(--muted); padding: 0 4px; }
+
+        .msg-bubble {
+            max-width: 84%; padding: 10px 13px;
+            border-radius: var(--radius);
+            font-size: 13px; line-height: 1.55; word-break: break-word;
+        }
+
+        .message.user .msg-bubble {
+            background: #1e1e2e;
+            border: 1px solid rgba(124,106,255,0.25);
+            border-bottom-right-radius: 3px;
+        }
+
+        .message.bot .msg-bubble {
+            background: #16162a;
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 3px;
+        }
+
+        .message.bot.streaming .msg-bubble {
+            border-color: rgba(124,106,255,0.45);
+            box-shadow: 0 0 0 1px rgba(124,106,255,0.12);
+        }
+
+        /* Cursor blink on streaming bot bubble */
+        .cursor {
+            display: inline-block; width: 2px; height: 13px;
+            background: var(--accent2); border-radius: 1px;
+            margin-left: 2px; vertical-align: middle;
+            animation: blink 0.8s step-end infinite;
+        }
+
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+        /* Interim (user typing) — dimmed */
+        .message.interim .msg-bubble {
+            opacity: 0.5;
+            border-style: dashed;
+        }
+
+        /* Typing dots */
+        .typing-bubble {
+            display: flex; align-items: center; gap: 5px;
+            padding: 11px 14px;
+            background: #16162a; border: 1px solid var(--border);
+            border-radius: var(--radius); border-bottom-left-radius: 3px;
+        }
+
+        .typing-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: var(--muted); animation: tdot 1.2s infinite;
+        }
+
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes tdot { 0%,60%,100%{transform:translateY(0);opacity:0.4} 30%{transform:translateY(-4px);opacity:1} }
+
+        .divider { height: 1px; background: var(--border); }
+
+        /* ── Text input bar ── */
+        .input-bar {
+            padding: 12px 14px;
+            display: flex; gap: 8px; align-items: center;
+            background: var(--surface2);
+            border-top: 1px solid var(--border);
+        }
+
+        .input-bar input {
+            flex: 1; background: var(--surface);
+            border: 1px solid var(--border); border-radius: 8px;
+            padding: 9px 13px; color: var(--text);
+            font-family: 'Syne', sans-serif; font-size: 13px;
+            outline: none; transition: border-color 0.2s;
+        }
+
+        .input-bar input::placeholder { color: var(--muted); }
+        .input-bar input:focus { border-color: var(--accent); }
+        .input-bar input:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .btn-send {
+            width: 36px; height: 36px; border-radius: 8px;
+            background: var(--accent); border: none; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; transition: all 0.18s; flex-shrink: 0;
+        }
+
+        .btn-send:hover:not(:disabled) { background: #6b59ee; transform: scale(1.05); }
+        .btn-send:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* ── Visualizer ── */
+        .visualizer-bar {
+            padding: 10px 18px;
+            display: flex; align-items: center; gap: 12px;
+            background: var(--surface2);
+        }
+
+        .viz-label { font-size: 10px; font-family: 'DM Mono', monospace; color: var(--muted); min-width: 26px; }
+
+        .viz-bars { display: flex; gap: 3px; align-items: center; flex: 1; }
+
+        .viz-bar { width: 3px; border-radius: 2px; background: var(--border); height: 4px; transition: background 0.3s; }
+
+        .viz-bars.mic-active .viz-bar { background: var(--accent); animation: vizidle 1.2s ease-in-out infinite; }
+        .viz-bars.mic-active .viz-bar:nth-child(1)  { animation-delay:0.00s }
+        .viz-bars.mic-active .viz-bar:nth-child(2)  { animation-delay:0.10s }
+        .viz-bars.mic-active .viz-bar:nth-child(3)  { animation-delay:0.20s }
+        .viz-bars.mic-active .viz-bar:nth-child(4)  { animation-delay:0.15s }
+        .viz-bars.mic-active .viz-bar:nth-child(5)  { animation-delay:0.05s }
+        .viz-bars.mic-active .viz-bar:nth-child(6)  { animation-delay:0.25s }
+        .viz-bars.mic-active .viz-bar:nth-child(7)  { animation-delay:0.10s }
+        .viz-bars.mic-active .viz-bar:nth-child(8)  { animation-delay:0.30s }
+        .viz-bars.mic-active .viz-bar:nth-child(9)  { animation-delay:0.20s }
+        .viz-bars.mic-active .viz-bar:nth-child(10) { animation-delay:0.05s }
+        .viz-bars.mic-active .viz-bar:nth-child(11) { animation-delay:0.15s }
+        .viz-bars.mic-active .viz-bar:nth-child(12) { animation-delay:0.00s }
+
+        @keyframes vizidle { 0%,100%{height:4px} 50%{height:16px} }
+
+        .viz-bars.bot-speaking .viz-bar { background: var(--green); animation: vizspeaking 0.55s ease-in-out infinite; }
+        .viz-bars.bot-speaking .viz-bar:nth-child(odd)  { animation-delay:0.00s }
+        .viz-bars.bot-speaking .viz-bar:nth-child(even) { animation-delay:0.14s }
+
+        @keyframes vizspeaking { 0%,100%{height:3px} 50%{height:20px} }
+
+        .viz-right { font-size: 9px; font-family: 'DM Mono', monospace; color: var(--muted); min-width: 20px; text-align: right; }
+
+        /* ── Controls ── */
+        .controls { padding: 12px 16px; display: flex; gap: 10px; align-items: center; }
+
+        .btn { border: none; cursor: pointer; font-family: 'Syne', sans-serif; font-weight: 600; transition: all 0.18s; display: flex; align-items: center; justify-content: center; gap: 7px; }
+        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .btn-start {
+            flex: 1; padding: 12px 18px;
+            background: linear-gradient(135deg, var(--accent), #9b7bff);
+            color: white; border-radius: var(--radius); font-size: 14px; letter-spacing: 0.3px;
+        }
+
+        .btn-start:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(124,106,255,0.3); }
+
+        .btn-icon { width: 44px; height: 44px; border-radius: 50%; font-size: 16px; flex-shrink: 0; }
+
+        .btn-mute { background: var(--surface2); border: 1px solid var(--border); color: var(--text); }
+        .btn-mute:hover:not(:disabled) { border-color: var(--accent); background: rgba(124,106,255,0.1); }
+        .btn-mute.muted { background: rgba(255,95,126,0.1); border-color: rgba(255,95,126,0.4); color: var(--red); }
+
+        .btn-end { background: rgba(255,95,126,0.08); border: 1px solid rgba(255,95,126,0.25); color: var(--red); }
+        .btn-end:hover:not(:disabled) { background: rgba(255,95,126,0.18); border-color: var(--red); }
+
+        /* ── Debug log ── */
+        .log-toggle {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 18px; border-top: 1px solid var(--border);
+            cursor: pointer; user-select: none;
+        }
+
+        .log-toggle span { font-size: 11px; font-family: 'DM Mono', monospace; color: var(--muted); }
+        .chevron { transition: transform 0.2s; }
+        .log-toggle.open .chevron { transform: rotate(180deg); }
+
+        .log-box {
+            display: none; background: #0a0a0c;
+            padding: 8px 14px; font-family: 'DM Mono', monospace; font-size: 10px;
+            height: 100px; overflow-y: auto; border-top: 1px solid var(--border);
+        }
+
+        .log-box.visible { display: block; }
+        .log-box::-webkit-scrollbar { width: 3px; }
+        .log-box::-webkit-scrollbar-thumb { background: var(--border); }
+
+        .log-entry { padding: 1.5px 0; line-height: 1.5; }
+        .log-entry.info  { color: #4ade80; }
+        .log-entry.warn  { color: var(--yellow); }
+        .log-entry.error { color: var(--red); }
+    </style>
+</head>
+<body>
+<div class="app">
+
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <div class="agent-avatar" id="agentAvatar">🤖</div>
+            <div class="agent-info">
+                <h1>NoaVoice Agent</h1>
+                <p id="agentSubtitle">Daily.co · Pipecat</p>
+            </div>
+        </div>
+        <div class="status-pill" id="statusPill">
+            <div class="status-dot"></div>
+            <span id="statusText">Idle</span>
+        </div>
+    </div>
+
+    <!-- Chat transcript -->
+    <div class="chat-area" id="chatArea">
+        <div class="chat-empty" id="chatEmpty">
+            <div class="chat-empty-icon">💬</div>
+            <p>Start a session to begin</p>
+        </div>
+    </div>
+
+    <!-- Text input bar -->
+    <div class="input-bar">
+        <input
+            type="text"
+            id="textInput"
+            placeholder="Type a message or speak…"
+            disabled
+            onkeydown="handleInputKey(event)"
+        />
+        <button class="btn-send" id="sendBtn" onclick="sendTextMessage()" disabled title="Send">➤</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Visualizer -->
+    <div class="visualizer-bar">
+        <span class="viz-label" id="vizLabel">MIC</span>
+        <div class="viz-bars" id="vizBars">
+            <div class="viz-bar"></div><div class="viz-bar"></div>
+            <div class="viz-bar"></div><div class="viz-bar"></div>
+            <div class="viz-bar"></div><div class="viz-bar"></div>
+            <div class="viz-bar"></div><div class="viz-bar"></div>
+            <div class="viz-bar"></div><div class="viz-bar"></div>
+            <div class="viz-bar"></div><div class="viz-bar"></div>
+        </div>
+        <span class="viz-right" id="vizRight"></span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Controls -->
+    <div class="controls">
+        <button class="btn btn-start" id="startBtn" onclick="startSession()">▶ Start Session</button>
+        <button class="btn btn-icon btn-mute" id="muteBtn" onclick="toggleMute()" disabled title="Mute/Unmute">🎤</button>
+        <button class="btn btn-icon btn-end"  id="endBtn"  onclick="disconnect()"  disabled title="End call">📵</button>
+    </div>
+
+    <!-- Debug log -->
+    <div class="log-toggle" id="logToggle" onclick="toggleLog()">
+        <span>Debug log</span><span class="chevron">▼</span>
+    </div>
+    <div class="log-box" id="logBox"></div>
+
+</div>
+
+<script>
+    const API_BASE = 'http://localhost:7860';
+
+    // ── State ──────────────────────────────────────────────────────────────────
+    let state = {
+        sessionId: null, roomUrl: null, roomToken: null,
+        callObject: null, joined: false, muted: false, botSpeaking: false,
+    };
+
+    // ── Chat state ─────────────────────────────────────────────────────────────
+    // For streaming bot response, we accumulate chunks into one bubble
+    let botStreamId     = null;   // id of the active bot bubble
+    let botStreamText   = '';     // accumulated text so far
+    let interimMsgId    = null;   // id of the interim user bubble
+    let typingEl        = null;   // typing indicator element
+
+    // ── Logging ────────────────────────────────────────────────────────────────
+    function log(msg, type = 'info') {
+        const ts  = new Date().toLocaleTimeString('en-US', {hour12: false});
+        const box = document.getElementById('logBox');
+        const div = document.createElement('div');
+        div.className   = `log-entry ${type}`;
+        div.textContent = `[${ts}] ${msg}`;
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
+        console.log(`[${ts}] ${msg}`);
+    }
+
+    function toggleLog() {
+        document.getElementById('logBox').classList.toggle('visible');
+        document.getElementById('logToggle').classList.toggle('open');
+    }
+
+    // ── Status ─────────────────────────────────────────────────────────────────
+    function setStatus(text, type = 'idle') {
+        document.getElementById('statusPill').className = `status-pill ${type}`;
+        document.getElementById('statusText').textContent = text;
+    }
+
+    // ── Chat helpers ───────────────────────────────────────────────────────────
+    function scrollChat() {
+        const a = document.getElementById('chatArea');
+        a.scrollTop = a.scrollHeight;
+    }
+
+    function hideEmpty() {
+        const e = document.getElementById('chatEmpty');
+        if (e) e.style.display = 'none';
+    }
+
+    /**
+     * Add a message bubble.
+     * @param {string} role      'user' | 'bot'
+     * @param {string} text      initial text
+     * @param {string|null} id   reuse existing bubble if provided
+     * @param {boolean} interim  dim the bubble (user interim transcript)
+     * @returns {string}         the bubble's data-id
+     */
+    function addMessage(role, text, id = null, interim = false) {
+        hideEmpty();
+        const area  = document.getElementById('chatArea');
+        const msgId = id || `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        
+        console.log(`[addMessage] role=${role}, text=${text.substring(0, 50)}, id=${msgId}, interim=${interim}`);
+
+        // Reuse existing bubble if same id
+        let wrap = area.querySelector(`[data-id="${msgId}"]`);
+        if (wrap) {
+            console.log(`[addMessage] Reusing existing bubble: ${msgId}`);
+            setBubbleText(wrap, text, false);
+            scrollChat();
+            return msgId;
+        }
+
+        wrap = document.createElement('div');
+        wrap.className  = `message ${role}${interim ? ' interim' : ''}`;
+        wrap.dataset.id = msgId;
+
+        const label = document.createElement('div');
+        label.className   = 'msg-label';
+        label.textContent = role === 'user' ? 'You' : 'Agent';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'msg-bubble';
+
+        wrap.appendChild(label);
+        wrap.appendChild(bubble);
+        area.appendChild(wrap);
+        
+        console.log(`[addMessage] Created new bubble. Current chat area children: ${area.children.length}`);
+
+        setBubbleText(wrap, text, false);
+        scrollChat();
+        return msgId;
+    }
+
+    /**
+     * Set bubble text. When streaming=true, append a blinking cursor.
+     */
+    function setBubbleText(wrapOrId, text, streaming) {
+        const wrap = typeof wrapOrId === 'string'
+            ? document.getElementById('chatArea').querySelector(`[data-id="${wrapOrId}"]`)
+            : wrapOrId;
+        if (!wrap) return;
+
+        const bubble = wrap.querySelector('.msg-bubble');
+        if (!bubble) return;
+
+        if (streaming) {
+            bubble.innerHTML = escapeHtml(text) + '<span class="cursor"></span>';
+            wrap.classList.add('streaming');
+        } else {
+            bubble.textContent = text;
+            wrap.classList.remove('streaming');
+        }
+        scrollChat();
+    }
+
+    function escapeHtml(str) {
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    function removeMessage(id) {
+        const el = document.getElementById('chatArea').querySelector(`[data-id="${id}"]`);
+        if (el) el.remove();
+    }
+
+    function showTyping() {
+        if (typingEl) return;
+        hideEmpty();
+        const area = document.getElementById('chatArea');
+        const wrap = document.createElement('div');
+        wrap.className = 'message bot';
+        wrap.id        = 'typing-indicator';
+
+        const label = document.createElement('div');
+        label.className   = 'msg-label';
+        label.textContent = 'Agent';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'typing-bubble';
+        bubble.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
+
+        wrap.appendChild(label);
+        wrap.appendChild(bubble);
+        area.appendChild(wrap);
+        scrollChat();
+        typingEl = wrap;
+    }
+
+    function hideTyping() {
+        if (typingEl) { typingEl.remove(); typingEl = null; }
+    }
+
+    // ── Visualizer ─────────────────────────────────────────────────────────────
+    function setVizMode(mode) {
+        const bars  = document.getElementById('vizBars');
+        const label = document.getElementById('vizLabel');
+        const right = document.getElementById('vizRight');
+        bars.className = 'viz-bars';
+        if (mode === 'mic')       { bars.classList.add('mic-active');    label.textContent = 'MIC'; right.textContent = ''; }
+        else if (mode === 'bot')  { bars.classList.add('bot-speaking');  label.textContent = 'BOT'; right.textContent = '🔊'; }
+        else                     {                                        label.textContent = 'MIC'; right.textContent = ''; }
+    }
+
+    // ── Daily SDK loader ───────────────────────────────────────────────────────
+    async function loadDailySDK() {
+        const urls = [
+            'https://unpkg.com/@daily-co/daily-js',
+            'https://cdn.daily.co/daily-js.js',
+            'https://cdn.jsdelivr.net/npm/@daily-co/daily-js',
+            '/daily-js.js',
+        ];
+        for (const url of urls) {
+            try {
+                log(`📥 SDK: ${url}...`);
+                const script = document.createElement('script');
+                script.src = url; script.async = false; script.crossOrigin = 'anonymous';
+                await new Promise((res, rej) => {
+                    const t = setTimeout(() => rej(new Error('timeout')), 15000);
+                    script.onload  = () => { clearTimeout(t); res(); };
+                    script.onerror = () => { clearTimeout(t); rej(new Error('failed')); };
+                    document.head.appendChild(script);
+                });
+                for (let i = 0; i < 100; i++) {
+                    if (window.Daily?.createCallObject)       return window.Daily;
+                    if (window.DailyIframe?.createCallObject) return window.DailyIframe;
+                    await new Promise(r => setTimeout(r, 50));
+                }
+            } catch (e) { log(`⚠️ CDN failed: ${url}`, 'warn'); }
+        }
+        throw new Error('Could not load Daily.co SDK');
+    }
+
+    // ── Start session ──────────────────────────────────────────────────────────
+    async function startSession() {
+        try {
+            log('🎤 Requesting mic...');
+            try {
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                log('✅ Mic granted');
+            } catch (e) {
+                log(`❌ Mic denied: ${e.message}`, 'error');
+                setStatus('Mic required', 'error');
+                return;
+            }
+
+            document.getElementById('startBtn').disabled = true;
+            setStatus('Creating room...', 'connecting');
+
+            log('📱 Creating bot session...');
+            const res = await fetch(`${API_BASE}/start_bot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            const data = await res.json();
+            state.sessionId = data.session_id;
+            state.roomUrl   = data.room_url;
+            state.roomToken = data.room_token;
+
+            log(`✅ Room: ${state.roomUrl}`);
+
+            if (!state.roomToken) {
+                log('❌ No token', 'error');
+                setStatus('Token missing', 'error');
+                document.getElementById('startBtn').disabled = false;
+                return;
+            }
+            log(`🔑 Token: ${state.roomToken.substring(0, 20)}...`);
+            setStatus('Loading SDK...', 'connecting');
+
+            const DailySDK = await loadDailySDK();
+            log('✅ SDK ready');
+
+            state.callObject = DailySDK.createCallObject({ audioSource: true, videoSource: false });
+
+            state.callObject
+                .on('joined-meeting',        handleJoined)
+                .on('left-meeting',          handleLeft)
+                .on('participant-joined',    handleParticipantJoined)
+                .on('participant-left',      handleParticipantLeft)
+                .on('track-started',         handleTrackStarted)
+                .on('active-speaker-change', handleActiveSpeaker)
+                .on('app-message',           handleAppMessage)
+                .on('error',                 handleDailyError);
+
+            log('🔌 Joining...');
+            setStatus('Joining...', 'connecting');
+            await state.callObject.join({ url: state.roomUrl, token: state.roomToken });
+
+            document.getElementById('muteBtn').disabled  = false;
+            document.getElementById('endBtn').disabled   = false;
+            document.getElementById('textInput').disabled = false;
+            document.getElementById('sendBtn').disabled   = false;
+            setVizMode('mic');
+
+        } catch (err) {
+            log(`❌ ${err.message}`, 'error');
+            setStatus('Error', 'error');
+            document.getElementById('startBtn').disabled = false;
+        }
+    }
+
+    // ── Daily events ───────────────────────────────────────────────────────────
+    function handleJoined() {
+        log('✅ Joined room');
+        state.joined = true;
+        setStatus('Waiting for agent...', 'connecting');
+    }
+
+    function handleLeft() {
+        log('👋 Left room');
+        state.joined = false;
+        setStatus('Disconnected', 'idle');
+        setVizMode('idle');
+        resetButtons();
+    }
+
+    function handleParticipantJoined(evt) {
+        const name = evt.participant?.user_name || 'Unknown';
+        log(`👤 ${name} joined`);
+        if (name === 'Pipecat Agent') {
+            log('🤖 Agent online');
+            setStatus('Connected', 'connected');
+            document.getElementById('agentAvatar').classList.add('online');
+            document.getElementById('agentSubtitle').textContent = 'Active · Daily.co';
+            showTyping();
+        }
+    }
+
+    function handleParticipantLeft(evt) {
+        const name = evt.participant?.user_name || 'participant';
+        log(`👤 ${name} left`);
+        if (name === 'Pipecat Agent') {
+            setStatus('Agent disconnected', 'error');
+            document.getElementById('agentAvatar').classList.remove('online');
+            document.getElementById('agentSubtitle').textContent = 'Disconnected';
+            hideTyping();
+            addMessage('bot', '[ Agent disconnected ]');
+        }
+    }
+
+    function handleTrackStarted(evt) {
+        if (evt.track?.kind !== 'audio') return;
+        const name = evt.participant?.user_name || 'unknown';
+        log(`🔊 Audio from: ${name}`);
+        if (name === 'Pipecat Agent') {
+            // Force playback — bypass browser autoplay policy
+            const audio     = new Audio();
+            audio.srcObject = new MediaStream([evt.track]);
+            audio.autoplay  = true;
+            audio.volume    = 1.0;
+            document.body.appendChild(audio);
+            audio.play().catch(e => log(`Audio error: ${e.message}`, 'warn'));
+            log('✅ Agent audio live');
+        }
+    }
+
+    function handleActiveSpeaker(evt) {
+        const name     = evt.activeSpeaker?.user_name || '';
+        const isBotNow = (name === 'Pipecat Agent');
+
+        if (isBotNow && !state.botSpeaking) {
+            state.botSpeaking = true;
+            setVizMode('bot');
+            log('🗣️ Agent speaking');
+        } else if (!isBotNow && state.botSpeaking) {
+            state.botSpeaking = false;
+            setVizMode(state.muted ? 'idle' : 'mic');
+            log('🤫 Agent stopped');
+        }
+    }
+
+    // ── App-message handler — live transcript from bot.py ─────────────────────
+    function handleAppMessage(evt) {
+        log(`📨 app-message: ${JSON.stringify(evt.data).substring(0, 100)}`);
+        try {
+            const msg = typeof evt.data === 'string' ? JSON.parse(evt.data) : evt.data;
+            if (!msg?.type) return;
+
+            switch (msg.type) {
+
+                // ── User speech (interim) — show dimmed, update in-place ────
+                case 'user_transcript': {
+                    const text = (msg.text || '').trim();
+                    if (!text) break;
+
+                    if (!msg.final) {
+                        // Interim: create or update the grey placeholder bubble
+                        if (!interimMsgId) {
+                            interimMsgId = addMessage('user', text, null, true);
+                        } else {
+                            setBubbleText(interimMsgId, text, false);
+                            // re-apply interim class
+                            const wrap = document.getElementById('chatArea').querySelector(`[data-id="${interimMsgId}"]`);
+                            if (wrap) wrap.classList.add('interim');
+                        }
+                    } else {
+                        // Final: replace interim bubble with solid one
+                        if (interimMsgId) {
+                            const wrap = document.getElementById('chatArea').querySelector(`[data-id="${interimMsgId}"]`);
+                            if (wrap) {
+                                wrap.classList.remove('interim');
+                                setBubbleText(wrap, text, false);
+                            }
+                            interimMsgId = null;
+                        } else {
+                            addMessage('user', text);
+                        }
+                        log(`📝 You: "${text}"`);
+                        // Show typing indicator after user speaks
+                        hideTyping();
+                        showTyping();
+                    }
+                    break;
+                }
+
+                // ── Bot response starts ─────────────────────────────────────
+                case 'bot_text_start': {
+                    hideTyping();
+                    botStreamText = '';
+                    botStreamId   = addMessage('bot', '');
+                    setBubbleText(botStreamId, '', true);  // show cursor immediately
+                    break;
+                }
+
+                // ── Bot text chunk — append to current bubble ───────────────
+                case 'bot_text_chunk': {
+                    const chunk = msg.text || '';
+                    if (!chunk) break;
+
+                    hideTyping();
+
+                    if (!botStreamId) {
+                        // Fallback: create bubble if start event was missed
+                        botStreamText = chunk;
+                        botStreamId   = addMessage('bot', chunk);
+                        setBubbleText(botStreamId, chunk, true);
+                    } else {
+                        botStreamText += chunk;
+                        setBubbleText(botStreamId, botStreamText, true);
+                    }
+                    break;
+                }
+
+                // ── Bot done — finalise bubble, remove cursor ───────────────
+                case 'bot_text_done': {
+                    if (botStreamId) {
+                        setBubbleText(botStreamId, botStreamText, false);
+                        log(`📝 Agent: "${botStreamText.substring(0, 60)}"`);
+                    }
+                    botStreamId   = null;
+                    botStreamText = '';
+                    break;
+                }
+            }
+        } catch (_) { /* ignore non-JSON or unknown messages */ }
+    }
+
+    // ── Text message input ─────────────────────────────────────────────────────
+    function handleInputKey(evt) {
+        if (evt.key === 'Enter' && !evt.shiftKey) {
+            evt.preventDefault();
+            sendTextMessage();
+        }
+    }
+
+    function sendTextMessage() {
+        const input = document.getElementById('textInput');
+        const text  = input.value.trim();
+        if (!text || !state.callObject || !state.joined) {
+            console.log(`[sendTextMessage] Early return: text=${!!text}, callObject=${!!state.callObject}, joined=${state.joined}`);
+            return;
+        }
+
+        console.log(`[sendTextMessage] Sending: "${text}"`);
+        addMessage('user', text);
+        input.value = '';
+
+        // Send with proper RTVI message format including id
+        try {
+            state.callObject.sendAppMessage({
+                id: `msg-${Date.now()}`,        // Required id field
+                label: "rtvi-ai",
+                type:  "user-llm-text",
+                data:  { text }
+            }, '*');
+            log(`📤 Sent: "${text}"`);
+        } catch (e) {
+            log(`Send error: ${e.message}`, 'warn');
+        }
+        showTyping();
+    }
+    // ── Mute ───────────────────────────────────────────────────────────────────
+    function toggleMute() {
+        if (!state.callObject || !state.joined) return;
+        state.muted = !state.muted;
+        state.callObject.setLocalAudio(!state.muted);
+        const btn = document.getElementById('muteBtn');
+        if (state.muted) {
+            btn.textContent = '🔇'; btn.classList.add('muted');
+            btn.title = 'Unmute'; setVizMode('idle');
+            log('🔇 Muted');
+        } else {
+            btn.textContent = '🎤'; btn.classList.remove('muted');
+            btn.title = 'Mute'; setVizMode('mic');
+            log('🎤 Unmuted');
+        }
+    }
+
+    // ── Disconnect ─────────────────────────────────────────────────────────────
+    async function disconnect() {
+        try {
+            if (state.callObject) {
+                await state.callObject.leave();
+                state.callObject.destroy();
+                state.callObject = null;
+            }
+        } catch (e) { log(`Disconnect error: ${e.message}`, 'warn'); }
+
+        log('🛑 Session ended');
+        setStatus('Idle', 'idle');
+        setVizMode('idle');
+        resetButtons();
+        hideTyping();
+        document.getElementById('agentAvatar').classList.remove('online');
+        document.getElementById('agentSubtitle').textContent = 'Daily.co · Pipecat';
+        state = { sessionId: null, roomUrl: null, roomToken: null, callObject: null, joined: false, muted: false, botSpeaking: false };
+        botStreamId = null; botStreamText = ''; interimMsgId = null;
+    }
+
+    function resetButtons() {
+        document.getElementById('startBtn').disabled  = false;
+        document.getElementById('muteBtn').disabled   = true;
+        document.getElementById('endBtn').disabled    = true;
+        document.getElementById('textInput').disabled = true;
+        document.getElementById('sendBtn').disabled   = true;
+        const btn = document.getElementById('muteBtn');
+        btn.textContent = '🎤'; btn.classList.remove('muted');
+    }
+
+    function handleDailyError(err) {
+        const msg = err?.message || err?.errorMsg || JSON.stringify(err) || 'Unknown';
+        log(`❌ Daily: ${msg}`, 'error');
+        setStatus('Error', 'error');
+    }
+
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.joined) disconnect(); });
+
+    log('🎙️ Ready — click Start Session');
+</script>
+</body>
+</html>

@@ -230,11 +230,18 @@ class BookingTools:
     async def _get_available_slots(self, params: Dict) -> Dict:
         logger.info(f"   📞 _get_available_slots() params: {params}")
         try:
+            # Ensure timezone is always passed (LLM might omit it)
+            date = params.get("date")
+            timezone = params.get("timezone") or "Asia/Kolkata"
+            
+            logger.info(f"   🔍 Slot request: date={date}, timezone={timezone}")
+            
             result = await self.api.get_available_slots(
-                date=params["date"],
-                timezone=params.get("timezone", "Asia/Kolkata"),
+                date=date,
+                timezone=timezone,
             )
             logger.critical(f"✅ _get_available_slots API returned: {type(result)}")
+            logger.info(f"   📋 Slots result: {result}")
             return tool_success("Available slots retrieved", result)
         except Exception as e:
             logger.error(f"Slot fetch error: {e}", exc_info=True)

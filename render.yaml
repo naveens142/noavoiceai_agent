@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: pipecat-agent
+    runtime: docker
+    region: oregon
+    plan: free
+    healthCheckPath: /health
+    healthCheckInterval: 30
+    
+    # Auto-deploy on GitHub push
+    repo: your-github-username/noavoice_pipecat-agent
+    branch: main
+    
+    # Environment variables (also set in Render dashboard)
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MAX_CONCURRENT_BOTS
+        value: "20"
+      - key: PORT
+        value: "7860"
+      
+      # Secrets (MUST be set in Render dashboard, not here):
+      # - DAILY_API_KEY
+      # - OPENAI_API_KEY
+      # - DEEPGRAM_API_KEY
+      # - API_BASE_URL

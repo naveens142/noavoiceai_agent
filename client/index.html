@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NoaVoice Pipecat Agent - Test Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .status-box {
+            background: #f5f5f5;
+            border-left: 4px solid #667eea;
+            padding: 12px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .status-box.connecting {
+            border-left-color: #ffc107;
+            background: #fffbf0;
+        }
+
+        .status-box.connected {
+            border-left-color: #4caf50;
+            background: #f1f8f4;
+        }
+
+        .status-box.error {
+            border-left-color: #f44336;
+            background: #fdebee;
+        }
+
+        .status-icon {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            vertical-align: middle;
+            background: #999;
+        }
+
+        .status-box.connecting .status-icon {
+            background: #ffc107;
+            animation: pulse 1.5s infinite;
+        }
+
+        .status-box.connected .status-icon {
+            background: #4caf50;
+        }
+
+        .status-box.error .status-icon {
+            background: #f44336;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .controls {
+            display: grid;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 12px 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-danger {
+            background: #f44336;
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #da190b;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(244, 67, 54, 0.3);
+        }
+
+        .btn-danger:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #1565c0;
+            line-height: 1.6;
+        }
+
+        .session-id {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            word-break: break-all;
+            color: #333;
+        }
+
+        .session-id-label {
+            font-size: 11px;
+            color: #999;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .indicators {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .indicator {
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 12px;
+            background: #f5f5f5;
+        }
+
+        .indicator-label {
+            color: #999;
+            margin-bottom: 4px;
+        }
+
+        .indicator-value {
+            font-weight: 600;
+            color: #333;
+            font-size: 18px;
+        }
+
+        .indicator.inactive {
+            opacity: 0.5;
+        }
+
+        .indicator.active {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .log-box {
+            background: #1a1a1a;
+            color: #00ff00;
+            padding: 12px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            height: 150px;
+            overflow-y: auto;
+            margin-bottom: 16px;
+            border: 1px solid #333;
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+            padding: 2px 0;
+        }
+
+        .log-entry.info {
+            color: #00ff00;
+        }
+
+        .log-entry.warn {
+            color: #ffaa00;
+        }
+
+        .log-entry.error {
+            color: #ff4444;
+        }
+
+        .footer {
+            text-align: center;
+            color: #999;
+            font-size: 12px;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+
+        .test-button-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .btn-test {
+            padding: 8px 12px;
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-test:hover:not(:disabled) {
+            background: #e0e0e0;
+            border-color: #999;
+        }
+
+        .btn-test:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎤 NoaVoice Agent</h1>
+            <p>WebRTC Voice Testing Interface</p>
+        </div>
+
+        <div id="status" class="status-box">
+            <span class="status-icon"></span>
+            <span id="statusText">Ready to connect</span>
+        </div>
+
+        <div class="info-box">
+            ℹ️ This test client connects to your bot via WebRTC. Click <strong>Start Session</strong> to begin, then <strong>Connect</strong> to establish the voice connection.
+        </div>
+
+        <div class="controls">
+            <button id="startBtn" class="btn-primary" onclick="startSession()">Start Session</button>
+            <button id="connectBtn" class="btn-primary" onclick="connect()" disabled>Connect</button>
+            <button id="disconnectBtn" class="btn-danger" onclick="disconnect()" disabled style="display:none;">Disconnect</button>
+        </div>
+
+        <div id="sessionBox" style="display:none;">
+            <div class="session-id">
+                <div class="session-id-label">Session ID</div>
+                <div id="sessionId"></div>
+            </div>
+        </div>
+
+        <div class="indicators">
+            <div class="indicator inactive" id="micIndicator">
+                <div class="indicator-label">Microphone</div>
+                <div class="indicator-value">—</div>
+            </div>
+            <div class="indicator inactive" id="speakerIndicator">
+                <div class="indicator-label">Speaker</div>
+                <div class="indicator-value">—</div>
+            </div>
+        </div>
+
+        <div class="log-box" id="logBox"></div>
+
+        <div class="test-button-group">
+            <button class="btn-test" id="testBtn1" onclick="sendTestMessage('What appointments are available?')" disabled>Test: Availability</button>
+            <button class="btn-test" id="testBtn2" onclick="sendTestMessage('Book me at 3pm')" disabled>Test: Book</button>
+        </div>
+
+        <div class="footer">
+            Connected to: <code>ws://localhost:7860/ws/{sessionId}</code>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_BASE = 'http://localhost:7860';
+        const LOG_LIMIT = 100;
+
+        // State
+        let state = {
+            sessionId: null,
+            connected: false,
+            websocket: null,
+            peerConnection: null,
+            localStream: null,
+            isConnecting: false
+        };
+
+        // Logging
+        const logs = [];
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+            const entry = `[${timestamp}] ${message}`;
+            logs.push({ message: entry, type });
+
+            if (logs.length > LOG_LIMIT) logs.shift();
+
+            const logBox = document.getElementById('logBox');
+            const div = document.createElement('div');
+            div.className = `log-entry ${type}`;
+            div.textContent = entry;
+            logBox.appendChild(div);
+            logBox.scrollTop = logBox.scrollHeight;
+
+            console.log(entry);
+        }
+
+        function setStatus(text, type = 'info') {
+            const statusBox = document.getElementById('status');
+            const statusText = document.getElementById('statusText');
+
+            statusBox.className = `status-box ${type === 'error' ? 'error' : type === 'connected' ? 'connected' : 'connecting'}`;
+            statusText.textContent = text;
+        }
+
+        async function startSession() {
+            try {
+                log('Creating bot session...');
+                setStatus('Creating session...', 'connecting');
+
+                const response = await fetch(`${API_BASE}/start_bot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const data = await response.json();
+                state.sessionId = data.session_id;
+
+                log(`✅ Session created: ${state.sessionId}`);
+                setStatus(`Session ready. Click "Connect" to establish WebRTC`, 'info');
+
+                // Show session info
+                document.getElementById('sessionBox').style.display = 'block';
+                document.getElementById('sessionId').textContent = state.sessionId;
+
+                // Update buttons
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('connectBtn').disabled = false;
+
+            } catch (error) {
+                log(`❌ Session creation failed: ${error.message}`, 'error');
+                setStatus(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function connect() {
+            if (state.isConnecting || state.connected) return;
+            state.isConnecting = true;
+
+            try {
+                log('🎤 Requesting microphone access...');
+                setStatus('Requesting microphone...', 'connecting');
+
+                // Get local media
+                state.localStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { echoCancellation: true, noiseSuppression: true },
+                    video: false 
+                });
+
+                log('✅ Microphone accessed');
+                updateMicIndicator(true);
+
+                // Create WebRTC peer connection
+                log('🔌 Creating WebRTC peer connection...');
+                state.peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
+                    ]
+                });
+
+                // Add local stream tracks
+                for (const track of state.localStream.getTracks()) {
+                    state.peerConnection.addTrack(track, state.localStream);
+                }
+
+                // Handle remote stream
+                state.peerConnection.ontrack = (event) => {
+                    log('🎵 Receiving audio from bot');
+                    updateSpeakerIndicator(true);
+                    playRemoteAudio(event.streams[0]);
+                };
+
+                state.peerConnection.onconnectionstatechange = () => {
+                    const state_val = state.peerConnection.connectionState;
+                    log(`Connection state: ${state_val}`);
+                    if (state_val === 'failed' || state_val === 'disconnected') {
+                        disconnect();
+                    }
+                };
+
+                // Create offer
+                log('📤 Creating WebRTC offer...');
+                const offer = await state.peerConnection.createOffer();
+                await state.peerConnection.setLocalDescription(offer);
+
+                // Connect WebSocket
+                log('🔌 Connecting to WebSocket...');
+                await connectWebSocket();
+
+                // Send offer via WebSocket
+                log('📤 Sending offer to bot...');
+                state.websocket.send(JSON.stringify({
+                    type: 'offer',
+                    data: offer
+                }));
+
+                state.isConnecting = false;
+                setStatus('Connected to bot ✅', 'connected');
+                state.connected = true;
+                log('✅ Connected to bot!');
+
+                // Update buttons
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('connectBtn').style.display = 'none';
+                document.getElementById('disconnectBtn').disabled = false;
+                document.getElementById('disconnectBtn').style.display = 'block';
+                document.getElementById('testBtn1').disabled = false;
+                document.getElementById('testBtn2').disabled = false;
+
+            } catch (error) {
+                log(`❌ Connection failed: ${error.message}`, 'error');
+                setStatus(`Error: ${error.message}`, 'error');
+                state.isConnecting = false;
+                disconnect();
+            }
+        }
+
+        function connectWebSocket() {
+            return new Promise((resolve, reject) => {
+                const wsUrl = `ws://localhost:7860/ws/${state.sessionId}`;
+                state.websocket = new WebSocket(wsUrl);
+
+                state.websocket.onopen = () => {
+                    log('✅ WebSocket connected');
+                    resolve();
+                };
+
+                state.websocket.onmessage = async (event) => {
+                    try {
+                        const message = JSON.parse(event.data);
+                        
+                        if (message.type === 'answer') {
+                            log('📥 Received answer from bot');
+                            await state.peerConnection.setRemoteDescription(
+                                new RTCSessionDescription(message.data)
+                            );
+                        } else if (message.type === 'candidate') {
+                            log('📥 Received ICE candidate');
+                            await state.peerConnection.addIceCandidate(
+                                new RTCIceCandidate(message.data)
+                            );
+                        }
+                    } catch (error) {
+                        log(`WebSocket message error: ${error.message}`, 'warn');
+                    }
+                };
+
+                state.websocket.onerror = (error) => {
+                    log(`WebSocket error: ${error}`, 'error');
+                    reject(error);
+                };
+
+                state.websocket.onclose = () => {
+                    log('WebSocket disconnected');
+                };
+
+                // Handle ICE candidates
+                state.peerConnection.onicecandidate = (event) => {
+                    if (event.candidate && state.websocket && state.websocket.readyState === WebSocket.OPEN) {
+                        state.websocket.send(JSON.stringify({
+                            type: 'candidate',
+                            data: event.candidate
+                        }));
+                    }
+                };
+            });
+        }
+
+        function playRemoteAudio(stream) {
+            const audio = document.createElement('audio');
+            audio.srcObject = stream;
+            audio.autoplay = true;
+            audio.play().catch(error => log(`Audio playback error: ${error.message}`, 'warn'));
+        }
+
+        function disconnect() {
+            log('🛑 Disconnecting...');
+            state.connected = false;
+
+            if (state.websocket) {
+                state.websocket.close();
+                state.websocket = null;
+            }
+
+            if (state.peerConnection) {
+                state.peerConnection.close();
+                state.peerConnection = null;
+            }
+
+            if (state.localStream) {
+                state.localStream.getTracks().forEach(track => track.stop());
+                state.localStream = null;
+            }
+
+            updateMicIndicator(false);
+            updateSpeakerIndicator(false);
+
+            setStatus('Disconnected', 'info');
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('connectBtn').style.display = 'block';
+            document.getElementById('disconnectBtn').disabled = true;
+            document.getElementById('disconnectBtn').style.display = 'none';
+            document.getElementById('testBtn1').disabled = true;
+            document.getElementById('testBtn2').disabled = true;
+
+            log('✅ Disconnected');
+        }
+
+        function updateMicIndicator(active) {
+            const indicator = document.getElementById('micIndicator');
+            if (active) {
+                indicator.className = 'indicator active';
+                indicator.querySelector('.indicator-value').textContent = '🎤';
+            } else {
+                indicator.className = 'indicator inactive';
+                indicator.querySelector('.indicator-value').textContent = '—';
+            }
+        }
+
+        function updateSpeakerIndicator(active) {
+            const indicator = document.getElementById('speakerIndicator');
+            if (active) {
+                indicator.className = 'indicator active';
+                indicator.querySelector('.indicator-value').textContent = '🔊';
+            } else {
+                indicator.className = 'indicator inactive';
+                indicator.querySelector('.indicator-value').textContent = '—';
+            }
+        }
+
+        function sendTestMessage(message) {
+            if (state.websocket && state.websocket.readyState === WebSocket.OPEN) {
+                log(`📨 Sending test message: "${message}"`);
+                state.websocket.send(JSON.stringify({
+                    type: 'message',
+                    data: message
+                }));
+            } else {
+                log('❌ WebSocket not connected', 'error');
+            }
+        }
+
+        // Initialize
+        log('Client loaded. Ready to start.');
+    </script>
+</body>
+</html>
