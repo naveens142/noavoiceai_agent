@@ -757,6 +757,7 @@
                     botStreamText = '';
                     botStreamId   = addMessage('bot', '');
                     setBubbleText(botStreamId, '', true);  // show cursor immediately
+                    log(`📝 Bot stream started`);
                     break;
                 }
 
@@ -772,9 +773,11 @@
                         botStreamText = chunk;
                         botStreamId   = addMessage('bot', chunk);
                         setBubbleText(botStreamId, chunk, true);
+                        log(`📝 Bot chunk (no start): ${chunk.substring(0, 40)}`);
                     } else {
                         botStreamText += chunk;
                         setBubbleText(botStreamId, botStreamText, true);
+                        log(`📝 Bot chunk: +${chunk.length} chars (total: ${botStreamText.length})`);
                     }
                     break;
                 }
@@ -859,6 +862,7 @@
         setVizMode('idle');
         resetButtons();
         hideTyping();
+        
         document.getElementById('agentAvatar').classList.remove('online');
         document.getElementById('agentSubtitle').textContent = 'Daily.co · Pipecat';
         state = { sessionId: null, roomUrl: null, roomToken: null, callObject: null, joined: false, muted: false, botSpeaking: false };

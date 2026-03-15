@@ -254,67 +254,108 @@ async def root():
 
 # ─── Start bot ─────────────────────────────────────────────────────────────────
 
+class BotSpawnRequest:
+    """Request to spawn bot in an existing room"""
+    def __init__(self, room_url: str = None):
+        self.room_url = room_url
+
+
 @app.post("/start_bot")
 async def start_bot(request: Request) -> JSONResponse:
     """
-    Create a Daily.co room, generate tokens for both the human client and the
-    bot, then spawn the bot pipeline in the background.
+    Spawn bot in a Daily.co room.
+    
+    If room_url is provided in request body, use that room.
+    Otherwise, create a new room (backward compatibility).
     """
     if len(active_sessions) >= MAX_CONCURRENT_BOTS:
         logger.warning(f"Max concurrent bots reached ({len(active_sessions)}/{MAX_CONCURRENT_BOTS})")
         raise HTTPException(status_code=503, detail="Max concurrent bots reached")
 
+    # Try to parse room_url from request body
+    room_url = None
+    try:
+        body = await request.json()
+        room_url = body.get("room_url") if isinstance(body, dict) else None
+    except Exception:
+        pass
+
     room_name = f"pipecat-{uuid.uuid4().hex[:8]}"
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            # 1. Create room
-            room_url = await _create_daily_room(client, room_name)
-            logger.info(f"[{room_name}] ✅ Room created: {room_url}")
+        # If no room_url provided, create a new room (legacy behavior)
+        if not room_url:
+            async with httpx.AsyncClient(timeout=15) as client:
+                # 1. Create room
+                room_url = await _create_daily_room(client, room_name)
+                logger.info(f"[{room_name}] ✅ Room created (legacy): {room_url}")
 
-            # 2. Client token (participant)
-            client_token = await _create_daily_token(
-                client, room_name, is_owner=False, user_name="User"
-            )
-            if not client_token:
-                raise HTTPException(status_code=500, detail="Failed to generate client token")
-            logger.info(f"[{room_name}] 🔑 Client token generated")
+                # 2. Client token (participant)
+                client_token = await _create_daily_token(
+                    client, room_name, is_owner=False, user_name="User"
+                )
+                if not client_token:
+                    raise HTTPException(status_code=500, detail="Failed to generate client token")
+                logger.info(f"[{room_name}] 🔑 Client token generated")
 
-        # 3. Track session
-        active_sessions[room_name] = {
-            "status": "created",
-            "room_url": room_url,
-            "created_at": asyncio.get_event_loop().time(),
-        }
+            # Track session for legacy flow
+            active_sessions[room_name] = {
+                "status": "created",
+                "room_url": room_url,
+                "created_at": asyncio.get_event_loop().time(),
+            }
 
-        # 4. Spawn bot (generates its own owner token)
+            return_session_id = room_name
+            return_token = client_token
+        else:
+            # Room already exists - just spawn bot in it
+            logger.info(f"[{room_name}] 📍 Using existing room: {room_url}")
+            active_sessions[room_name] = {
+                "status": "created",
+                "room_url": room_url,
+                "created_at": asyncio.get_event_loop().time(),
+            }
+            return_session_id = room_name
+            return_token = None  # Client already has token
+
+        # Spawn bot in the room
         asyncio.create_task(spawn_bot_for_room(room_name, room_url))
-        logger.info(f"[{room_name}] 🚀 Bot spawning — returning room info to client")
+        logger.info(f"[{room_name}] 🤖 Bot spawning in room: {room_url}")
 
         return JSONResponse({
             "status": "success",
-            "session_id": room_name,
+            "session_id": return_session_id,
             "room_url": room_url,
-            "room_token": client_token,
-            "message": "Join the room with Daily.co SDK. Bot will join automatically.",
+            "room_token": return_token,
+            "message": "Bot spawning in room",
         })
 
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"❌ Failed to create bot session: {exc}", exc_info=True)
+        logger.error(f"❌ Failed to spawn bot: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to start bot: {exc}")
 
 
 async def spawn_bot_for_room(session_id: str, room_url: str) -> None:
     """Generate a bot owner token and run the Pipecat pipeline."""
     try:
+        # Extract room_name from room_url
+        # URL format: https://noavoiceai.daily.co/room-XXXXX
+        # We need: room-XXXXX
+        try:
+            room_name = room_url.split("/")[-1]  # Get last part after final /
+            logger.info(f"[{session_id}] 📍 Extracted room_name from URL: {room_name}")
+        except Exception as e:
+            logger.error(f"[{session_id}] ❌ Failed to extract room_name from {room_url}: {e}")
+            room_name = session_id  # Fallback (will likely fail)
+
         async with httpx.AsyncClient(timeout=10) as client:
             bot_token = await _create_daily_token(
-                client, session_id, is_owner=True, user_name="Pipecat Agent"
+                client, room_name, is_owner=True, user_name="Pipecat Agent"
             )
         if bot_token:
-            logger.info(f"[{session_id}] 🔑 Bot token generated")
+            logger.info(f"[{session_id}] 🔑 Bot token generated for room: {room_name}")
         else:
             logger.warning(f"[{session_id}] ⚠️ Could not generate bot token — joining without owner privileges")
 

@@ -87,17 +87,45 @@ _app_config: Optional[AppConfig] = None
 # ─── Daily app-message sender helper ─────────────────────────────────────────
 
 def _daily_send_app_message(transport: DailyTransport, payload: dict, session_id: str) -> None:
+    """Send app message via Daily transport to all room participants."""
     data = json.dumps(payload)
     try:
-        # _client lives on the output transport (DailyOutputTransport)
-        output = getattr(transport, '_output', None)
-        client = getattr(output, '_client', None)
-        if client and hasattr(client, 'send_app_message'):
-            client.send_app_message(data, None)
+        # Try method 1: Direct transport method
+        if hasattr(transport, 'send_app_message'):
+            transport.send_app_message(data, None)
+            logger.debug(f"[{session_id}] ✅ App-message sent via transport.send_app_message")
             return
-        logger.warning(f"[{session_id}] send_app_message not found on transport._output._client")
+        
+        # Try method 2: Via input transport
+        input_transport = getattr(transport, '_input', None)
+        if input_transport and hasattr(input_transport, 'send_app_message'):
+            input_transport.send_app_message(data, None)
+            logger.debug(f"[{session_id}] ✅ App-message sent via transport._input.send_app_message")
+            return
+        
+        # Try method 3: Via output transport (original approach)
+        output_transport = getattr(transport, '_output', None)
+        if output_transport:
+            # Try the output transport client
+            if hasattr(output_transport, 'send_app_message'):
+                output_transport.send_app_message(data, None)
+                logger.debug(f"[{session_id}] ✅ App-message sent via transport._output.send_app_message")
+                return
+            
+            # Try via internal _client
+            client = getattr(output_transport, '_client', None)
+            if client and hasattr(client, 'send_app_message'):
+                client.send_app_message(data, None)
+                logger.debug(f"[{session_id}] ✅ App-message sent via transport._output._client.send_app_message")
+                return
+        
+        # If nothing worked, log all available info
+        logger.warning(f"[{session_id}] ⚠️ Could not send app-message - no suitable method found")
+        logger.debug(f"[{session_id}] Transport type: {type(transport)}")
+        logger.debug(f"[{session_id}] Transport methods: {[m for m in dir(transport) if 'message' in m.lower()]}")
+        
     except Exception as exc:
-        logger.debug(f"[{session_id}] app-message send error: {exc}")
+        logger.error(f"[{session_id}] ❌ Failed to send app-message: {type(exc).__name__}: {exc}", exc_info=True)
 
 
 # ─── Transcript broadcaster ───────────────────────────────────────────────────
@@ -351,7 +379,7 @@ async def bot(transport: DailyTransport) -> None:
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info(f"[{session_id}] Client disconnected")
+        logger.error(f"[{session_id}] ⚠️ CLIENT DISCONNECTED - cancelling task")
         await task.cancel()
         context.set_messages([{"role": "system", "content": _app_config.system_prompt}])
 

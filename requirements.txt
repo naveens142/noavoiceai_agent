@@ -1,5 +1,6 @@
 # Pipecat Voice Agent - Production Requirements
 # For Render.com deployment
+# All dependencies are actively used in the project
 
 # Pipecat Framework with Daily.co and OpenAI support
 pipecat-ai[deepgram,openai,daily]==0.0.104
@@ -13,8 +14,8 @@ pydantic>=2.0.0
 pydantic-settings>=2.0.0
 
 # HTTP Client
-httpx
+httpx>=0.25.0
 
 # Environment & Logging
-python-dotenv
-loguru
+python-dotenv>=1.0.0
+loguru>=0.7.0
