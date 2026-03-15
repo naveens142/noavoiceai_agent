@@ -29,8 +29,8 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
 # Services
 from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.services.openai.tts import OpenAITTSService
+from pipecat.services.openai.llm import OpenAILLMService, OpenAILLMSettings
+from pipecat.services.openai.tts import OpenAITTSService, OpenAITTSSettings
 
 # Transport - Daily.co (official Pipecat pattern)
 from pipecat.transports.daily.transport import DailyTransport, DailyParams
@@ -286,14 +286,15 @@ async def _build_pipeline(
 
     llm = OpenAILLMService(
         api_key=settings.openai_api_key,
-        model=_app_config.openai_model,
+        settings=OpenAILLMSettings(model=_app_config.openai_model),
     )
 
     tts = OpenAITTSService(
         api_key=settings.openai_api_key,
-        model="tts-1",
-        voice=_app_config.tts_voice,
-        language=None,
+        settings=OpenAITTSSettings(
+            model="tts-1",
+            voice=_app_config.tts_voice,
+        ),
     )
 
     # Create placeholder text capturer (will be linked to task after task creation)
