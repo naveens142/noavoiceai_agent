@@ -1,7 +1,7 @@
 services:
   - type: web
     name: pipecat-agent
-    runtime: docker
+    runtime: python-3.11
     region: oregon
     plan: free
     healthCheckPath: /health
@@ -10,6 +10,10 @@ services:
     # Auto-deploy on GitHub push
     repo: your-github-username/noavoice_pipecat-agent
     branch: main
+    
+    # Build and start commands
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot_runner.py
     
     # Environment variables (also set in Render dashboard)
     envVars:
