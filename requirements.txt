@@ -1,9 +1,11 @@
 # Pipecat Voice Agent - Production Requirements
 # SmallWebRTC (peer-to-peer) transport with OpenAI & Deepgram
 
-# Core framework
-pipecat-ai>=0.0.104
-pipecat-ai[deepgram,openai]>=0.0.104
+# Core framework with all required extras
+# webrtc: SmallWebRTC transport (includes cv2/opencv-python)
+# deepgram: Speech-to-Text
+# openai: LLM and Text-to-Speech
+pipecat-ai[deepgram,openai,webrtc]>=0.0.104
 
 # WebRTC & Audio/Video
 aiortc>=1.5.0
