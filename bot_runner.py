@@ -1,23 +1,20 @@
-"""
-bot_runner.py
-Pipecat Bot Runner - Daily.co Transport (Official Pipecat Pattern)
-Uses Daily.co for WebRTC - official Pipecat recommendation.
-Free: 10,000 participant-minutes per month.
-Works locally AND in production (Render).
+"""bot_runner.py
+Pipecat Bot Runner - SmallWebRTC Transport
+Uses WebRTC for peer-to-peer communication.
+Works locally AND in production (Google Cloud Run, Render, etc).
 """
 
 import os
 import sys
 import asyncio
 import argparse
-import uuid
-import httpx
+import socket
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, List
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from loguru import logger
@@ -27,7 +24,15 @@ load_dotenv(override=True)
 
 from agent.config import settings
 from bot import initialize_app, bot
-from pipecat.transports.daily.transport import DailyTransport, DailyParams
+
+# ── Official Pipecat SmallWebRTC imports ──────────────────────────────────────
+from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+from pipecat.transports.base_transport import TransportParams
+from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection, IceServer
+from pipecat.transports.smallwebrtc.request_handler import (
+    SmallWebRTCRequest,
+    SmallWebRTCRequestHandler,
+)
 
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -52,60 +57,53 @@ logger.add(
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
-DAILY_API_KEY      = os.getenv("DAILY_API_KEY", "9b747accdd8dc593c4469826c0c5127fe931d56ee304063dab4cbddad7b12567")
 MAX_CONCURRENT_BOTS = int(os.getenv("MAX_CONCURRENT_BOTS", "20"))
 PORT               = int(os.getenv("PORT", "7860"))
 HOST               = os.getenv("HOST", "0.0.0.0")
-DAILY_API_BASE     = "https://api.daily.co/v1"
 
-active_sessions: dict = {}   # session_id → session metadata
-sdk_cache:       dict = {}   # in-memory cache for Daily.co JS SDK
+active_sessions: dict = {}
 
 
-# ─── Daily.co API helpers ──────────────────────────────────────────────────────
+# ─── ICE/TURN Server Configuration ─────────────────────────────────────────────
 
-def _daily_headers() -> dict:
-    return {"Authorization": f"Bearer {DAILY_API_KEY}"}
+def _get_ice_servers() -> Optional[List[IceServer]]:
+    """Get ICE servers for NAT traversal."""
+    turn_url = os.getenv("METERED_TURN_URL")
+    username  = os.getenv("METERED_TURN_USERNAME")
+    credential = os.getenv("METERED_TURN_CREDENTIAL")
+
+    if not turn_url or not username or not credential:
+        logger.info("No TURN configured — using default STUN")
+        return None
+
+    logger.info(f"TURN configured: {turn_url}")
+    return [
+        IceServer(urls="stun:stun.relay.metered.ca:80"),
+        IceServer(urls=f"turn:{turn_url}:80",               username=username, credential=credential),
+        IceServer(urls=f"turn:{turn_url}:80?transport=tcp", username=username, credential=credential),
+        IceServer(urls=f"turn:{turn_url}:443",              username=username, credential=credential),
+        IceServer(urls=f"turns:{turn_url}:443?transport=tcp", username=username, credential=credential),
+    ]
 
 
-async def _create_daily_room(client: httpx.AsyncClient, room_name: str) -> str:
-    """Create a private Daily.co room. Returns room_url."""
-    resp = await client.post(
-        f"{DAILY_API_BASE}/rooms",
-        json={"name": room_name, "privacy": "private"},
-        headers=_daily_headers(),
-    )
-    if resp.status_code != 200:
-        logger.error(f"Daily room creation failed: {resp.status_code} {resp.text}")
-        raise HTTPException(status_code=500, detail="Failed to create Daily.co room")
-    return resp.json()["url"]
+# ─── SmallWebRTCRequestHandler (singleton) ────────────────────────────────────
+#
+# This is Pipecat's official helper. It:
+#   1. Calls connection.initialize(offer_sdp) — sets up tracks, data channel, etc.
+#   2. Waits for ICE gathering to complete.
+#   3. Returns the fully-formed SDP answer in one shot.
+#   4. Manages connection re-use (pc_id) for ICE restarts.
+
+_webrtc_handler: Optional[SmallWebRTCRequestHandler] = None
 
 
-async def _create_daily_token(
-    client: httpx.AsyncClient,
-    room_name: str,
-    *,
-    is_owner: bool,
-    user_name: str,
-) -> Optional[str]:
-    """Generate a Daily.co meeting token. Returns token string or None on failure."""
-    resp = await client.post(
-        f"{DAILY_API_BASE}/meeting-tokens",
-        json={
-            "properties": {
-                "room_name": room_name,
-                "is_owner": is_owner,
-                "user_name": user_name,
-                "enable_screenshare": False,
-                "start_video_off": True,
-            }
-        },
-        headers=_daily_headers(),
-    )
-    if resp.status_code == 200:
-        return resp.json().get("token")
-    logger.error(f"Daily token generation failed: {resp.status_code} {resp.text}")
-    return None
+def get_handler() -> SmallWebRTCRequestHandler:
+    global _webrtc_handler
+    if _webrtc_handler is None:
+        _webrtc_handler = SmallWebRTCRequestHandler(
+            ice_servers=_get_ice_servers(),
+        )
+    return _webrtc_handler
 
 
 # ─── FastAPI Lifespan ──────────────────────────────────────────────────────────
@@ -113,12 +111,11 @@ async def _create_daily_token(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("╔" + "═" * 58 + "╗")
-    logger.info("║ PIPECAT BOT RUNNER (Daily.co Transport)                 ║")
+    logger.info("║ PIPECAT BOT RUNNER (SmallWebRTC Transport)             ║")
     logger.info("╚" + "═" * 58 + "╝")
 
-    if not DAILY_API_KEY:
-        logger.error("❌ DAILY_API_KEY not set — add it to .env or export it")
-        sys.exit(1)
+    # Eagerly create the handler so ICE config is validated at startup
+    get_handler()
 
     try:
         logger.info("🔄 Initializing bot app (this may take 10-20 seconds)...")
@@ -131,7 +128,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ App init failed: {exc}")
         logger.warning("⚠️ Using defaults — tools may not be available")
 
-    logger.info("🎙️  Daily.co transport (official Pipecat pattern)")
+    logger.info("🎙️  SmallWebRTC transport (peer-to-peer, no external SaaS)")
     logger.info(f"✅ HTTP server ready on {HOST}:{PORT}")
     logger.info(f"📊 Max concurrent bots: {MAX_CONCURRENT_BOTS}")
 
@@ -145,8 +142,8 @@ async def lifespan(app: FastAPI):
 # ─── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Pipecat Bot Runner (Daily.co)",
-    description="Voice agent with Daily.co WebRTC transport",
+    title="Pipecat Bot Runner (SmallWebRTC)",
+    description="Voice agent with SmallWebRTC peer-to-peer transport",
     version="2.0.0",
     lifespan=lifespan,
 )
@@ -176,7 +173,7 @@ async def health_check():
         "status": "healthy",
         "active_sessions": len(active_sessions),
         "max_concurrent": MAX_CONCURRENT_BOTS,
-        "transport": "daily",
+        "transport": "smallwebrtc",
     })
 
 
@@ -186,7 +183,7 @@ async def status():
         "active_sessions": len(active_sessions),
         "max_concurrent": MAX_CONCURRENT_BOTS,
         "sessions": list(active_sessions.keys()),
-        "transport": "daily.co",
+        "transport": "smallwebrtc",
     })
 
 
@@ -197,7 +194,6 @@ async def list_sessions():
             {
                 "session_id": sid,
                 "status": data.get("status", "unknown"),
-                "room_url": data.get("room_url", ""),
                 "created_at": data.get("created_at", 0),
             }
             for sid, data in active_sessions.items()
@@ -207,175 +203,86 @@ async def list_sessions():
     })
 
 
-# ─── Daily.co JS SDK proxy (CDN fallback) ──────────────────────────────────────
+# ─── WebRTC Signaling — single /offer endpoint ────────────────────────────────
+#
+# KEY FIX: Use SmallWebRTCRequestHandler.handle_web_request().
+#
+# This replaces the old split /offer + polling /answer pattern.
+# The answer SDP is returned synchronously in the same HTTP response,
+# which is what all standard WebRTC clients (and the Pipecat JS SDK) expect.
 
-@app.get("/daily-js.js")
-async def serve_daily_sdk():
-    """Proxy/cache the Daily.co JS SDK as a CDN fallback."""
-    if "daily-js" in sdk_cache:
-        return Response(content=sdk_cache["daily-js"], media_type="application/javascript")
-
-    cdn_urls = [
-        "https://cdn.daily.co/daily-js.js",
-        "https://unpkg.com/@daily-co/daily-js@latest/dist/daily-js.js",
-    ]
-    async with httpx.AsyncClient(timeout=10) as client:
-        for url in cdn_urls:
-            try:
-                resp = await client.get(url, follow_redirects=True)
-                if resp.status_code == 200:
-                    sdk_cache["daily-js"] = resp.text
-                    logger.info(f"✅ Daily.co SDK cached from {url}")
-                    return Response(content=resp.text, media_type="application/javascript")
-            except Exception:
-                continue
-
-    error_js = "console.error('Daily.co SDK failed to load from all CDN sources');"
-    return Response(content=error_js, media_type="application/javascript", status_code=503)
-
-
-# ─── Root / landing page ───────────────────────────────────────────────────────
-
-@app.get("/")
-async def root():
-    for filename in ("daily-client.html", "index.html"):
-        path = os.path.join(client_dir, filename)
-        if os.path.isfile(path):
-            return FileResponse(path, media_type="text/html")
-
-    return HTMLResponse("""
-    <html><body style="font-family:Arial;max-width:600px;margin:50px auto;">
-        <h1>🎙️ Pipecat Voice Bot</h1>
-        <p>✅ Server running (Daily.co transport)</p>
-        <p><a href="/health">Health</a> | <a href="/docs">API Docs</a></p>
-    </body></html>
-    """)
-
-
-# ─── Start bot ─────────────────────────────────────────────────────────────────
-
-class BotSpawnRequest:
-    """Request to spawn bot in an existing room"""
-    def __init__(self, room_url: str = None):
-        self.room_url = room_url
-
-
-@app.post("/start_bot")
-async def start_bot(request: Request) -> JSONResponse:
+@app.post("/offer")
+async def handle_offer(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     """
-    Spawn bot in a Daily.co room.
-    
-    If room_url is provided in request body, use that room.
-    Otherwise, create a new room (backward compatibility).
+    Receive WebRTC SDP offer, return SDP answer in the same response.
+    The bot is spawned as a background task once the connection is initialized.
     """
-    if len(active_sessions) >= MAX_CONCURRENT_BOTS:
-        logger.warning(f"Max concurrent bots reached ({len(active_sessions)}/{MAX_CONCURRENT_BOTS})")
-        raise HTTPException(status_code=503, detail="Max concurrent bots reached")
-
-    # Try to parse room_url from request body
-    room_url = None
     try:
-        body = await request.json()
-        room_url = body.get("room_url") if isinstance(body, dict) else None
+        data = await request.json()
     except Exception:
-        pass
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    room_name = f"pipecat-{uuid.uuid4().hex[:8]}"
+    if len(active_sessions) >= MAX_CONCURRENT_BOTS:
+        raise HTTPException(status_code=503, detail="Maximum concurrent sessions reached")
 
+    # Build the SmallWebRTCRequest pydantic model the handler expects
     try:
-        # If no room_url provided, create a new room (legacy behavior)
-        if not room_url:
-            async with httpx.AsyncClient(timeout=15) as client:
-                # 1. Create room
-                room_url = await _create_daily_room(client, room_name)
-                logger.info(f"[{room_name}] ✅ Room created (legacy): {room_url}")
-
-                # 2. Client token (participant)
-                client_token = await _create_daily_token(
-                    client, room_name, is_owner=False, user_name="User"
-                )
-                if not client_token:
-                    raise HTTPException(status_code=500, detail="Failed to generate client token")
-                logger.info(f"[{room_name}] 🔑 Client token generated")
-
-            # Track session for legacy flow
-            active_sessions[room_name] = {
-                "status": "created",
-                "room_url": room_url,
-                "created_at": asyncio.get_event_loop().time(),
-            }
-
-            return_session_id = room_name
-            return_token = client_token
-        else:
-            # Room already exists - just spawn bot in it
-            logger.info(f"[{room_name}] 📍 Using existing room: {room_url}")
-            active_sessions[room_name] = {
-                "status": "created",
-                "room_url": room_url,
-                "created_at": asyncio.get_event_loop().time(),
-            }
-            return_session_id = room_name
-            return_token = None  # Client already has token
-
-        # Spawn bot in the room
-        asyncio.create_task(spawn_bot_for_room(room_name, room_url))
-        logger.info(f"[{room_name}] 🤖 Bot spawning in room: {room_url}")
-
-        return JSONResponse({
-            "status": "success",
-            "session_id": return_session_id,
-            "room_url": room_url,
-            "room_token": return_token,
-            "message": "Bot spawning in room",
-        })
-
-    except HTTPException:
-        raise
+        webrtc_request = SmallWebRTCRequest(**data)
     except Exception as exc:
-        logger.error(f"❌ Failed to spawn bot: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to start bot: {exc}")
+        raise HTTPException(status_code=400, detail=f"Invalid WebRTC request: {exc}")
 
+    handler = get_handler()
 
-async def spawn_bot_for_room(session_id: str, room_url: str) -> None:
-    """Generate a bot owner token and run the Pipecat pipeline."""
-    try:
-        # Extract room_name from room_url
-        # URL format: https://noavoiceai.daily.co/room-XXXXX
-        # We need: room-XXXXX
-        try:
-            room_name = room_url.split("/")[-1]  # Get last part after final /
-            logger.info(f"[{session_id}] 📍 Extracted room_name from URL: {room_name}")
-        except Exception as e:
-            logger.error(f"[{session_id}] ❌ Failed to extract room_name from {room_url}: {e}")
-            room_name = session_id  # Fallback (will likely fail)
+    # webrtc_connection_callback is called by the handler AFTER the connection
+    # is fully initialized (tracks registered, ICE gathered).  We spawn the bot
+    # pipeline here so it starts AFTER the transport is ready.
+    async def webrtc_connection_callback(connection: SmallWebRTCConnection):
+        session_id = connection.pc_id
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            bot_token = await _create_daily_token(
-                client, room_name, is_owner=True, user_name="Pipecat Agent"
-            )
-        if bot_token:
-            logger.info(f"[{session_id}] 🔑 Bot token generated for room: {room_name}")
-        else:
-            logger.warning(f"[{session_id}] ⚠️ Could not generate bot token — joining without owner privileges")
-
-        transport = DailyTransport(
-            room_url=room_url,
-            token=bot_token,
-            bot_name="Pipecat Agent",
-            params=DailyParams(
-                audio_in_enabled=True,
-                audio_out_enabled=True,
+        transport = SmallWebRTCTransport(
+            webrtc_connection=connection,
+            params=TransportParams(
+                audio_in_enabled=True,   # ← REQUIRED: receive mic audio
+                audio_out_enabled=True,  # ← REQUIRED: send TTS audio back
+                audio_out_10ms_chunks=2, # smoother audio delivery
             ),
         )
 
-        active_sessions[session_id]["status"] = "running"
-        logger.info(f"[{session_id}] 🤖 Bot joining room...")
-        await bot(transport)
-        logger.info(f"[{session_id}] ✅ Bot session completed")
+        active_sessions[session_id] = {
+            "status": "running",
+            "created_at": asyncio.get_event_loop().time(),
+        }
+        logger.info(f"[{session_id}] 🤖 Spawning bot task...")
 
+        # Run bot as background task so we don't block the HTTP response
+        background_tasks.add_task(_run_bot_session, transport, session_id)
+
+    # handle_web_request() does the full SDP handshake and returns the answer
+    try:
+        answer = await handler.handle_web_request(
+            request=webrtc_request,
+            webrtc_connection_callback=webrtc_connection_callback,
+        )
     except Exception as exc:
-        logger.error(f"[{session_id}] ❌ Bot spawn failed: {type(exc).__name__}: {exc}", exc_info=True)
+        logger.error(f"WebRTC handshake failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if answer is None:
+        raise HTTPException(status_code=500, detail="No SDP answer generated")
+
+    # answer is a dict with keys: sdp, type, pc_id
+    return JSONResponse(answer)
+
+
+# ─── Bot session runner ────────────────────────────────────────────────────────
+
+async def _run_bot_session(transport: SmallWebRTCTransport, session_id: str) -> None:
+    """Run bot pipeline for one session, clean up on exit."""
+    try:
+        await bot(transport, session_id)
+        logger.info(f"[{session_id}] ✅ Bot session completed normally")
+    except Exception as exc:
+        logger.error(f"[{session_id}] ❌ Bot session error: {type(exc).__name__}: {exc}", exc_info=True)
     finally:
         active_sessions.pop(session_id, None)
         logger.info(f"[{session_id}] 🧹 Session cleaned up")
@@ -385,7 +292,6 @@ async def spawn_bot_for_room(session_id: str, room_url: str) -> None:
 
 @app.post("/stop_bot/{session_id}")
 async def stop_bot(session_id: str) -> JSONResponse:
-    """Stop a bot session by session_id."""
     if session_id not in active_sessions:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
     active_sessions.pop(session_id, None)
@@ -393,33 +299,29 @@ async def stop_bot(session_id: str) -> JSONResponse:
     return JSONResponse({"status": "success", "session_id": session_id})
 
 
-# ─── Daily.co webhook (optional) ──────────────────────────────────────────────
+# ─── Root / landing page ───────────────────────────────────────────────────────
 
-@app.post("/webhook")
-async def webhook_handler(request: Request):
-    """Receive Daily.co room events (participant-joined, participant-left, etc.)."""
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+@app.get("/")
+async def root():
+    for filename in ("webrtc-client.html", "daily-client.html", "index.html"):
+        path = os.path.join(client_dir, filename)
+        if os.path.isfile(path):
+            return FileResponse(path, media_type="text/html")
 
-    event_type = body.get("event", "unknown")
-    session_id = body.get("room_name", "unknown")
-    logger.info(f"[{session_id}] Daily.co webhook: {event_type}")
-
-    if event_type == "participant-joined" and session_id in active_sessions:
-        active_sessions[session_id]["status"] = "running"
-    elif event_type == "participant-left":
-        active_sessions.pop(session_id, None)
-
-    return {"status": "received"}
+    return HTMLResponse("""
+    <html><body style="font-family:Arial;max-width:600px;margin:50px auto;">
+        <h1>🎙️ Pipecat Voice Bot</h1>
+        <p>✅ Server running (SmallWebRTC transport)</p>
+        <p>POST SDP offer to <code>/offer</code> to start a session.</p>
+        <p><a href="/health">Health</a> | <a href="/docs">API Docs</a></p>
+    </body></html>
+    """)
 
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-    import socket
 
     # Allow fast restart without "address already in use"
     _orig_socket = socket.socket
@@ -434,7 +336,7 @@ if __name__ == "__main__":
                 pass
     socket.socket = _ReuseSocket
 
-    parser = argparse.ArgumentParser(description="Pipecat Bot Runner (Daily.co)")
+    parser = argparse.ArgumentParser(description="Pipecat Bot Runner (SmallWebRTC)")
     parser.add_argument("--host", default=HOST)
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--reload", action="store_true")

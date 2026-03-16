@@ -1,21 +1,25 @@
 # Pipecat Voice Agent - Production Requirements
-# For Render.com deployment
-# All dependencies are actively used in the project
+# SmallWebRTC (peer-to-peer) transport with OpenAI & Deepgram
 
-# Pipecat Framework with Daily.co and OpenAI support
-pipecat-ai[deepgram,openai,daily]==0.0.104
+# Core framework
+pipecat-ai>=0.0.104
+pipecat-ai[deepgram,openai]>=0.0.104
 
-# Web Framework & Server
+# WebRTC & Audio/Video
+aiortc>=1.5.0
+av>=10.0.0
+
+# Web server
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 
-# Data & Configuration
+# Configuration & validation
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 
-# HTTP Client
+# HTTP client (used by pipecat)
 httpx>=0.25.0
 
-# Environment & Logging
+# Utilities
 python-dotenv>=1.0.0
 loguru>=0.7.0

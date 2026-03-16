@@ -1,7 +1,7 @@
 services:
   - type: web
     name: pipecat-agent
-    runtime: python-3.10
+    runtime: python-3.11
     region: oregon
     plan: free
     healthCheckPath: /health
@@ -11,14 +11,12 @@ services:
     repo: your-github-username/noavoice_pipecat-agent
     branch: main
     
-    # Build and start commands - use pip not poetry
+    # Build and start commands
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python bot_runner.py
     
-    # Environment variables (also set in Render dashboard)
+    # Environment variables (can also be set in Render dashboard)
     envVars:
-      - key: ENVIRONMENT
-        value: production
       - key: LOG_LEVEL
         value: INFO
       - key: MAX_CONCURRENT_BOTS
@@ -26,8 +24,9 @@ services:
       - key: PORT
         value: "7860"
       
-      # Secrets (MUST be set in Render dashboard, not here):
-      # - DAILY_API_KEY
-      # - OPENAI_API_KEY
-      # - DEEPGRAM_API_KEY
-      # - API_BASE_URL
+      # ⚠️  IMPORTANT: Set these SECRETS in Render dashboard, NOT in this file:
+      # - OPENAI_API_KEY (from https://platform.openai.com/api-keys)
+      # - DEEPGRAM_API_KEY (from https://console.deepgram.com/keys)
+      # - API_BASE_URL (your backend API URL)
+      # - API_USERNAME (for backend authentication)
+      # - API_PASSWORD (for backend authentication)

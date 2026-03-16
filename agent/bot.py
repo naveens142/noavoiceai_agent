@@ -294,7 +294,6 @@ async def _build_pipeline(
         api_key=settings.openai_api_key,
         model="tts-1",
         voice=_app_config.tts_voice,
-        language=None,
     )
 
     # One broadcaster instance — placed twice in the pipeline

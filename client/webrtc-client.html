@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NoaVoice Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg:       #0d0d0f;
+            --surface:  #141417;
+            --surface2: #1c1c21;
+            --border:   #2a2a32;
+            --accent:   #7c6aff;
+            --accent2:  #a78bfa;
+            --green:    #22d3a0;
+            --red:      #ff5f7e;
+            --yellow:   #fbbf24;
+            --text:     #f0f0f5;
+            --muted:    #6b6b80;
+            --radius:   12px;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family:'Syne',sans-serif; background:var(--bg); color:var(--text);
+            min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
+        }
+        .app {
+            width:100%; max-width:480px; display:flex; flex-direction:column;
+            background:var(--surface); border:1px solid var(--border); border-radius:20px;
+            overflow:hidden; box-shadow:0 40px 80px rgba(0,0,0,.6),0 0 0 1px rgba(124,106,255,.08);
+        }
+        .header {
+            padding:20px 22px 16px; border-bottom:1px solid var(--border);
+            display:flex; align-items:center; justify-content:space-between;
+            background:linear-gradient(135deg,rgba(124,106,255,.07) 0%,transparent 60%);
+        }
+        .header-left { display:flex; align-items:center; gap:12px; }
+        .agent-avatar {
+            width:40px; height:40px; border-radius:50%;
+            background:linear-gradient(135deg,var(--accent),var(--accent2));
+            display:flex; align-items:center; justify-content:center;
+            font-size:18px; flex-shrink:0; position:relative;
+        }
+        .agent-avatar::after {
+            content:''; position:absolute; bottom:1px; right:1px;
+            width:10px; height:10px; border-radius:50%;
+            background:var(--green); border:2px solid var(--surface);
+            opacity:0; transition:opacity .3s;
+        }
+        .agent-avatar.online::after { opacity:1; }
+        .agent-info h1 { font-size:15px; font-weight:700; letter-spacing:-.3px; }
+        .agent-info p  { font-size:11px; color:var(--muted); font-family:'DM Mono',monospace; margin-top:1px; }
+        .header-right  { display:flex; align-items:center; gap:8px; }
+
+        /* Speaking wave badge */
+        .speaking-badge {
+            display:none; align-items:center; gap:4px;
+            padding:3px 9px; border-radius:20px; font-size:10px;
+            font-family:'DM Mono',monospace;
+            background:rgba(124,106,255,.12); border:1px solid rgba(124,106,255,.3); color:var(--accent2);
+        }
+        .speaking-badge.on { display:flex; }
+        .speaking-badge .b { width:2px; height:10px; background:var(--accent2); border-radius:1px; animation:wave .8s ease-in-out infinite; }
+        .speaking-badge .b:nth-child(2){animation-delay:.15s}
+        .speaking-badge .b:nth-child(3){animation-delay:.3s}
+        @keyframes wave{0%,100%{transform:scaleY(.4)}50%{transform:scaleY(1)}}
+
+        .status-pill {
+            display:flex; align-items:center; gap:6px; padding:5px 10px; border-radius:20px;
+            border:1px solid var(--border); font-size:11px; font-family:'DM Mono',monospace;
+            color:var(--muted); background:var(--surface2); transition:all .3s;
+        }
+        .status-dot { width:6px; height:6px; border-radius:50%; background:var(--muted); transition:all .3s; }
+        .status-pill.connected  { border-color:rgba(34,211,160,.3); color:var(--green); }
+        .status-pill.connected .status-dot { background:var(--green); box-shadow:0 0 6px var(--green); animation:pdot 2s infinite; }
+        .status-pill.connecting { border-color:rgba(251,191,36,.3); color:var(--yellow); }
+        .status-pill.connecting .status-dot { background:var(--yellow); animation:pdot 1s infinite; }
+        .status-pill.error      { border-color:rgba(255,95,126,.3); color:var(--red); }
+        .status-pill.error .status-dot { background:var(--red); }
+        @keyframes pdot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
+
+        /* Chat */
+        .chat-area {
+            height:360px; overflow-y:auto; padding:18px 18px 10px;
+            display:flex; flex-direction:column; gap:12px; scroll-behavior:smooth;
+        }
+        .chat-area::-webkit-scrollbar{width:4px}
+        .chat-area::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+
+        .chat-empty {
+            flex:1; display:flex; flex-direction:column; align-items:center;
+            justify-content:center; gap:10px; color:var(--muted); padding:40px 0;
+        }
+        .chat-empty-icon{font-size:30px;opacity:.35}
+        .chat-empty p{font-size:12px;font-family:'DM Mono',monospace}
+
+        .message { display:flex; flex-direction:column; gap:3px; animation:msgin .2s ease-out; }
+        @keyframes msgin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+        .message.user { align-items:flex-end; }
+        .message.bot  { align-items:flex-start; }
+        .msg-label { font-size:10px; font-family:'DM Mono',monospace; color:var(--muted); padding:0 4px; }
+        .msg-bubble {
+            max-width:84%; padding:10px 13px; border-radius:var(--radius);
+            font-size:13px; line-height:1.55; word-break:break-word;
+        }
+        .message.user .msg-bubble {
+            background:#1e1e2e; border:1px solid rgba(124,106,255,.25); border-bottom-right-radius:3px;
+        }
+        .message.bot .msg-bubble {
+            background:#16162a; border:1px solid var(--border); border-bottom-left-radius:3px;
+        }
+        /* Interim user transcript — dimmed dashed */
+        .message.user.interim .msg-bubble { opacity:.45; border-style:dashed; }
+        /* Bot bubble while still speaking */
+        .message.bot.live .msg-bubble {
+            border-color:rgba(124,106,255,.5); box-shadow:0 0 0 1px rgba(124,106,255,.12);
+        }
+        /* Blinking cursor on active bot bubble (CSS-only, no JS needed) */
+        .message.bot.live .msg-bubble::after {
+            content:'▌'; color:var(--accent2); margin-left:2px;
+            animation:blink .8s step-end infinite;
+        }
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+        .divider{height:1px;background:var(--border)}
+        .controls{padding:12px 16px;display:flex;gap:10px;align-items:center}
+        .btn{border:none;cursor:pointer;font-family:'Syne',sans-serif;font-weight:600;transition:all .18s;display:flex;align-items:center;justify-content:center;gap:7px}
+        .btn:disabled{opacity:.3;cursor:not-allowed}
+        .btn-start{flex:1;padding:12px 18px;background:linear-gradient(135deg,var(--accent),#9b7bff);color:#fff;border-radius:var(--radius);font-size:14px;letter-spacing:.3px}
+        .btn-start:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 8px 24px rgba(124,106,255,.3)}
+        .btn-icon{width:44px;height:44px;border-radius:50%;font-size:16px;flex-shrink:0}
+        .btn-mute{background:var(--surface2);border:1px solid var(--border);color:var(--text)}
+        .btn-mute:hover:not(:disabled){border-color:var(--accent);background:rgba(124,106,255,.1)}
+        .btn-mute.muted{background:rgba(255,95,126,.1);border-color:rgba(255,95,126,.4);color:var(--red)}
+        .btn-end{background:rgba(255,95,126,.08);border:1px solid rgba(255,95,126,.25);color:var(--red)}
+        .btn-end:hover:not(:disabled){background:rgba(255,95,126,.18);border-color:var(--red)}
+
+        .log-toggle{display:flex;align-items:center;justify-content:space-between;padding:8px 18px;border-top:1px solid var(--border);cursor:pointer;user-select:none}
+        .log-toggle span{font-size:11px;font-family:'DM Mono',monospace;color:var(--muted)}
+        .chevron{transition:transform .2s}
+        .log-toggle.open .chevron{transform:rotate(180deg)}
+        .log-box{display:none;background:#0a0a0c;padding:8px 14px;font-family:'DM Mono',monospace;font-size:10px;height:100px;overflow-y:auto;border-top:1px solid var(--border)}
+        .log-box.visible{display:block}
+        .log-box::-webkit-scrollbar{width:3px}
+        .log-box::-webkit-scrollbar-thumb{background:var(--border)}
+        .log-entry{padding:1.5px 0;line-height:1.5}
+        .log-entry.info{color:#4ade80}
+        .log-entry.warn{color:var(--yellow)}
+        .log-entry.error{color:var(--red)}
+        .log-entry.rtvi{color:var(--accent2)}
+
+        /* Text input bar */
+        .input-bar {
+            padding:12px 14px; display:flex; gap:8px; align-items:center;
+            background:var(--surface2); border-top:1px solid var(--border);
+        }
+        .input-bar input {
+            flex:1; background:var(--surface); border:1px solid var(--border);
+            border-radius:8px; padding:9px 13px; color:var(--text);
+            font-family:'Syne',sans-serif; font-size:13px; outline:none;
+            transition:border-color .2s;
+        }
+        .input-bar input::placeholder { color:var(--muted); }
+        .input-bar input:focus { border-color:var(--accent); }
+        .input-bar input:disabled { opacity:.4; cursor:not-allowed; }
+        .btn-send {
+            width:36px; height:36px; border-radius:8px;
+            background:var(--accent); border:none; cursor:pointer;
+            display:flex; align-items:center; justify-content:center;
+            font-size:14px; transition:all .18s; flex-shrink:0;
+            color:#fff; font-weight:600;
+        }
+        .btn-send:hover:not(:disabled) { background:#6b59ee; transform:scale(1.05); }
+        .btn-send:disabled { opacity:.3; cursor:not-allowed; }
+    </style>
+</head>
+<body>
+<div class="app">
+    <div class="header">
+        <div class="header-left">
+            <div class="agent-avatar" id="agentAvatar">&#129302;</div>
+            <div class="agent-info">
+                <h1>NoaVoice Agent</h1>
+                <p>SmallWebRTC &middot; Pipecat</p>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="speaking-badge" id="speakingBadge">
+                <div class="b"></div><div class="b"></div><div class="b"></div>
+                <span>Speaking</span>
+            </div>
+            <div class="status-pill" id="statusPill">
+                <div class="status-dot"></div>
+                <span id="statusText">Idle</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="chat-area" id="chatArea">
+        <div class="chat-empty" id="chatEmpty">
+            <div class="chat-empty-icon">&#128172;</div>
+            <p>Start a session to begin</p>
+        </div>
+    </div>
+
+    <!-- Text input bar -->
+    <div class="input-bar">
+        <input
+            type="text"
+            id="textInput"
+            placeholder="Type a message or speak…"
+            disabled
+            onkeydown="handleInputKey(event)"
+        />
+        <button class="btn-send" id="sendBtn" onclick="sendTextMessage()" disabled title="Send">&#10174;</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="controls">
+        <button class="btn btn-start" id="startBtn" onclick="startSession()">&#9654; Start Session</button>
+        <button class="btn btn-icon btn-mute" id="muteBtn" onclick="toggleMute()" disabled>&#127908;</button>
+        <button class="btn btn-icon btn-end"  id="endBtn"  onclick="disconnect()"  disabled>&#128245;</button>
+    </div>
+
+    <div class="log-toggle" id="logToggle" onclick="toggleLog()">
+        <span>Debug log</span><span class="chevron">&#9660;</span>
+    </div>
+    <div class="log-box" id="logBox"></div>
+</div>
+
+<script>
+var API_BASE = window.location.origin;
+
+var S = {                  // app state
+    pc: null, stream: null,
+    dc: null,              // RTVI data channel
+    muted: false,
+    botMsgId: null,        // current bot bubble being built
+    userInterimId: null    // current interim user bubble
+};
+
+// ── Logging ───────────────────────────────────────────────────────────────────
+function log(msg, type) {
+    type = type || 'info';
+    var ts = new Date().toLocaleTimeString('en-US',{hour12:false});
+    var box = document.getElementById('logBox');
+    var d = document.createElement('div');
+    d.className = 'log-entry ' + type;
+    d.textContent = '['+ts+'] '+msg;
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+    console.log('['+ts+'] '+msg);
+}
+function toggleLog() {
+    document.getElementById('logBox').classList.toggle('visible');
+    document.getElementById('logToggle').classList.toggle('open');
+}
+
+// ── Status helpers ────────────────────────────────────────────────────────────
+function setStatus(txt, cls) {
+    document.getElementById('statusPill').className = 'status-pill '+(cls||'idle');
+    document.getElementById('statusText').textContent = txt;
+}
+function setSpeaking(on) {
+    document.getElementById('speakingBadge').classList.toggle('on', on);
+}
+
+// ── Chat helpers ──────────────────────────────────────────────────────────────
+function scrollChat() { var a=document.getElementById('chatArea'); a.scrollTop=a.scrollHeight; }
+function hideEmpty()  { var e=document.getElementById('chatEmpty'); if(e) e.style.display='none'; }
+
+function upsertMsg(role, text, id, extraCls) {
+    hideEmpty();
+    var area  = document.getElementById('chatArea');
+    var msgId = id || ('m'+Date.now()+Math.random().toString(36).slice(2));
+    var wrap  = area.querySelector('[data-id="'+msgId+'"]');
+    if (wrap) {
+        wrap.querySelector('.msg-bubble').textContent = text;
+        wrap.className = 'message '+role+(extraCls?' '+extraCls:'');
+        scrollChat(); return msgId;
+    }
+    wrap = document.createElement('div');
+    wrap.className  = 'message '+role+(extraCls?' '+extraCls:'');
+    wrap.dataset.id = msgId;
+    var lbl = document.createElement('div');
+    lbl.className = 'msg-label'; lbl.textContent = role==='user'?'You':'Agent';
+    var bub = document.createElement('div');
+    bub.className = 'msg-bubble'; bub.textContent = text;
+    wrap.appendChild(lbl); wrap.appendChild(bub);
+    area.appendChild(wrap); scrollChat(); return msgId;
+}
+
+function appendToMsg(id, text) {
+    var wrap = document.getElementById('chatArea').querySelector('[data-id="'+id+'"]');
+    if (!wrap) return;
+    wrap.querySelector('.msg-bubble').textContent += text;
+    scrollChat();
+}
+
+function finalizeMsg(id) {
+    var wrap = document.getElementById('chatArea').querySelector('[data-id="'+id+'"]');
+    if (wrap) wrap.classList.remove('interim','live');
+}
+
+// ── Text input handling ───────────────────────────────────────────────────────
+function handleInputKey(evt) {
+    if (evt.key === 'Enter' && !evt.shiftKey) {
+        evt.preventDefault();
+        sendTextMessage();
+    }
+}
+
+function sendTextMessage() {
+    var input = document.getElementById('textInput');
+    var text = input.value.trim();
+    if (!text) return;
+
+    log('📤 Sending: "' + text.slice(0, 60) + '"');
+
+    if (!S.dc || S.dc.readyState !== 'open') {
+        log('❌ Cannot send — data channel not ready (state: ' + (S.dc ? S.dc.readyState : 'null') + ')', 'error');
+        return;
+    }
+
+    try {
+        S.dc.send(JSON.stringify(mkRtvi('send-text', { content: text })));
+        upsertMsg('user', text, null, '');
+        input.value = '';
+        log('✅ Message sent', 'rtvi');
+    } catch (err) {
+        log('❌ Send error: ' + err.message, 'error');
+    }
+}
+
+// ── Data channel setup ───────────────────────────────────────────────────────
+// The data channel MUST be created before createOffer() so it is negotiated
+// in the SDP.  setupDataChannel() registers handlers; onChannelReady() fires
+// from onopen (or immediately if already open).
+function setupDataChannel(chan) {
+    if (chan.label !== 'rtvi-ai') {
+        log('⚠️  Ignoring non-RTVI channel: ' + chan.label, 'warn');
+        return;
+    }
+    // Reject duplicate registrations (server ondatachannel vs client-created)
+    if (S.dc && S.dc !== chan) {
+        log('⚠️  Already have rtvi-ai channel, ignoring extra', 'warn');
+        return;
+    }
+    S.dc = chan;
+    log('📡 Data channel registered: rtvi-ai (state: ' + chan.readyState + ')');
+
+    chan.onmessage = function(e) {
+        try { onRTVIMessage(e.data); }
+        catch (err) { log('❌ Message error: ' + err, 'error'); }
+    };
+    chan.onerror = function(e) {
+        log('📡 Data channel error: ' + (e.message || e), 'error');
+    };
+    chan.onclose = function() {
+        log('📡 Data channel closed', 'warn');
+        S.dc = null;
+        setTextInputEnabled(false);
+    };
+    chan.onopen = function() {
+        log('📡 Data channel OPEN ✅', 'rtvi');
+        onChannelReady();
+    };
+    if (chan.readyState === 'open') {
+        log('💡 Data channel already open, initializing now');
+        onChannelReady();
+    } else {
+        log('⏳ Waiting for data channel to open...');
+    }
+}
+
+function onChannelReady() {
+    // Handshake: tell server we are ready so RTVIProcessor sends bot-ready.
+    // The RTVIMessage pydantic model on the server REQUIRES the `id` field.
+    try {
+        S.dc.send(JSON.stringify(mkRtvi('client-ready')));
+        log('📤 Sent client-ready (with id) to server', 'rtvi');
+    } catch (err) {
+        log('⚠️  Could not send client-ready: ' + err.message, 'warn');
+    }
+    setTextInputEnabled(true);
+    log('✅ Text input ENABLED');
+}
+
+// ── Enable/disable text input based on connection ──────────────────────────────
+function setTextInputEnabled(enabled) {
+    var input = document.getElementById('textInput');
+    var btn = document.getElementById('sendBtn');
+    input.disabled = !enabled;
+    btn.disabled = !enabled;
+}
+
+
+
+// ── RTVI helpers ─────────────────────────────────────────────────────────────
+// Pipecat's RTVIMessage pydantic model requires `id` on every message.
+function mkRtviId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+function mkRtvi(type, data) {
+    var m = { label: 'rtvi-ai', type: type, id: mkRtviId() };
+    if (data !== undefined) m.data = data;
+    return m;
+}
+
+// ── RTVI data channel ─────────────────────────────────────────────────────────
+//
+// Protocol:
+//   Client → Server  {"label":"rtvi-ai","type":"client-ready","id":"<uid>"}
+//                    This unlocks the RTVIProcessor and triggers on_client_ready
+//                    which queues the greeting LLMRunFrame.
+//
+//   Server → Client  {"label":"rtvi-ai","type":"bot-ready"}
+//                    {"label":"rtvi-ai","type":"user-transcription","data":{"text":"...","final":true}}
+//                    {"label":"rtvi-ai","type":"bot-tts-text","data":{"text":"..."}}
+//                    {"label":"rtvi-ai","type":"bot-started-speaking"}
+//                    {"label":"rtvi-ai","type":"bot-stopped-speaking"}
+
+function sendRTVIOnChannel(chan, obj) {
+    if (chan && chan.readyState === 'open') {
+        chan.send(JSON.stringify(obj));
+        return true;
+    }
+    return false;
+}
+
+function sendRTVI(obj) {
+    if (S.dc && S.dc.readyState === 'open') {
+        S.dc.send(JSON.stringify(obj));
+        return true;
+    }
+    return false;
+}
+
+function onRTVIMessage(raw) {
+    var msg;
+    try { 
+        msg = JSON.parse(raw); 
+    } catch(e) { 
+        log('❌ Failed to parse RTVI message: '+raw.slice(0,80), 'error');
+        return; 
+    }
+    
+    if (msg.label !== 'rtvi-ai') {
+        log('⚠️  Skipping message with label: '+msg.label);
+        return;
+    }
+
+    var t = msg.type;
+    var d = msg.data || {};
+    
+    // Log every message that arrives
+    log('📨 RTVI MESSAGE: type='+t + (d.text ? ' text="'+d.text.slice(0,40)+'"' : ''), 'rtvi');
+
+    if (t === 'bot-ready') {
+        log('✅ Bot ready', 'rtvi');
+
+    } else if (t === 'user-transcription' || t === 'user_transcript') {
+        var finalText = d.text || '';
+        var isFinal = d.final === true;
+        log('👤 User transcript (final=' + isFinal + '): "' + finalText.slice(0, 40) + '"');
+        if (isFinal) {
+            // Upgrade the interim bubble to final (same ID avoids duplicate)
+            upsertMsg('user', finalText, S.userInterimId, '');
+            S.userInterimId = null;
+        } else {
+            S.userInterimId = upsertMsg('user', finalText, S.userInterimId, 'interim');
+        }
+
+    } else if (t === 'user-text') {
+        // User typed message (from text input)
+        log('👤 User text input');
+        upsertMsg('user', d.text, null, '');
+
+    } else if (t === 'bot-tts-started') {
+        // TTS generation started — create a fresh bubble NOW so text streams immediately.
+        // First, clean up any previous response bubble that has no text (timeout/error).
+        if (S.botMsgId) { 
+            var oldBubble = document.querySelector('[data-id="' + S.botMsgId + '"]');
+            if (oldBubble) {
+                var textContent = oldBubble.querySelector('.msg-bubble').textContent.trim();
+                if (textContent.length === 0) {
+                    // Empty bubble from previous failed turn, remove it
+                    oldBubble.remove();
+                }
+            }
+        }
+        S.botMsgId = upsertMsg('bot', '', null, 'live');  // Empty bubble, will fill with chunks
+        log('🤖 Bot TTS started');
+
+    } else if (t === 'bot-tts-text') {
+        // Text chunk from TTS — append to the bubble created at tts-started.
+        var chunk = (d && d.text) ? d.text : '';
+        if (S.botMsgId) {
+            appendToMsg(S.botMsgId, chunk);
+        } else {
+            // Fallback if tts-started was missed (shouldn't happen)
+            S.botMsgId = upsertMsg('bot', chunk, null, 'live');
+        }
+
+    } else if (t === 'bot-tts-stopped') {
+        // TTS generation done — but keep bubble live, still waiting for bot-stopped-speaking.
+        log('🤖 Bot TTS generation done');
+
+    } else if (t === 'bot-started-speaking') {
+        log('🔊 Bot started speaking');
+        setSpeaking(true);
+        // If we somehow have a stale finalized bubble, reset so new chunks create a fresh one.
+        // (Don't finalize here — tts-text may already be accumulating.)
+
+    } else if (t === 'bot-stopped-speaking') {
+        // Audio playback finished — finalize the bubble visually, but KEEP S.botMsgId.
+        // Late-arriving tts-text chunks will append to it (even though it's no longer "live").
+        log('🔇 Bot stopped speaking');
+        setSpeaking(false);
+        if (S.botMsgId) { 
+            finalizeMsg(S.botMsgId);
+            // DO NOT set S.botMsgId = null here ← late text needs to append to this bubble
+        }
+
+    } else if (t === 'user-started-speaking') {
+        log('👂 User started speaking');
+        S.userInterimId = null;
+
+    } else if (t === 'user-stopped-speaking') {
+        log('👂 User stopped speaking');
+
+    } else if (t === 'user-llm-text') {
+        // Server echoes back the text that was sent to the LLM — informational only.
+
+    } else if (t === 'llm-function-call-started' || t === 'llm-function-call-in-progress' || t === 'llm-function-call-stopped') {
+        log('⚙️ Tool call: ' + t.replace('llm-function-call-', ''));
+
+    } else if (t === 'bot-ready') {
+        log('✅ Bot ready', 'rtvi');
+
+    } else {
+        log('⚠️  Unhandled RTVI message type: ' + t, 'warn');
+    }
+}
+
+// ── WebRTC ────────────────────────────────────────────────────────────────────
+async function startSession() {
+    try {
+        document.getElementById('startBtn').disabled = true;
+        setStatus('Connecting...','connecting');
+        log('Starting session...');
+
+        S.pc = new RTCPeerConnection({
+            iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]
+        });
+
+        // ── CRITICAL: create data channel BEFORE createOffer() ──────────────
+        // The 'rtvi-ai' channel must be in the SDP offer so aiortc (server)
+        // receives it via ondatachannel and opens it as part of the handshake.
+        // Creating it after setRemoteDescription leaves it stuck in 'connecting'.
+        log('📡 Creating RTVI data channel (before offer)...');
+        var dc = S.pc.createDataChannel('rtvi-ai', { ordered: true });
+        setupDataChannel(dc);
+        log('📡 Data channel registered before offer ✅');
+
+        log('Requesting mic...');
+        S.stream = await navigator.mediaDevices.getUserMedia({audio:true});
+        log('Mic ready');
+        S.stream.getTracks().forEach(function(t){ S.pc.addTrack(t,S.stream); });
+
+        S.pc.onicecandidate = function(e){ if(e.candidate) log('ICE: '+e.candidate.candidate.slice(0,50)+'...'); };
+
+        S.pc.onconnectionstatechange = function() {
+            log('WebRTC: ' + S.pc.connectionState);
+            if (S.pc.connectionState === 'connected') {
+                setStatus('Connected', 'connected');
+                document.getElementById('agentAvatar').classList.add('online');
+                document.getElementById('muteBtn').disabled = false;
+                document.getElementById('endBtn').disabled  = false;
+                // Data channel was already created before the offer and is
+                // negotiated in the SDP — it will open automatically here.
+            } else if (/failed|disconnected|closed/.test(S.pc.connectionState)) {
+                setStatus('Disconnected', 'error'); setSpeaking(false);
+                setTextInputEnabled(false);
+            }
+        };
+
+        // If the server also creates an rtvi-ai channel, accept it only if we
+        // don't already have one (setupDataChannel deduplicates by label).
+        S.pc.ondatachannel = function(e) {
+            log('📡 Server offered data channel: ' + e.channel.label);
+            setupDataChannel(e.channel);
+        };
+
+        // Remote audio (bot voice)
+        S.pc.ontrack = function(e) {
+            log('Remote track: '+e.track.kind);
+            if (e.track.kind==='audio') {
+                var a = new Audio();
+                a.srcObject = e.streams[0]; a.autoplay = true;
+                a.play().catch(function(err){ log('Audio: '+err,'error'); });
+            }
+        };
+
+        // Create offer and wait for full ICE gather
+        var offer = await S.pc.createOffer();
+        await S.pc.setLocalDescription(offer);
+        log('Waiting for ICE gather...');
+
+        await new Promise(function(resolve){
+            if (S.pc.iceGatheringState==='complete'){ resolve(); return; }
+            function chk(){ if(S.pc.iceGatheringState==='complete'){S.pc.removeEventListener('icegatheringstatechange',chk);resolve();} }
+            S.pc.addEventListener('icegatheringstatechange',chk);
+            setTimeout(resolve,4000);
+        });
+        log('ICE gathered');
+
+        log('Sending offer...');
+        var resp = await fetch(API_BASE+'/offer',{
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ sdp:S.pc.localDescription.sdp, type:S.pc.localDescription.type })
+        });
+        if (!resp.ok) throw new Error('Offer failed '+resp.status+': '+(await resp.text()));
+
+        var ans = await resp.json();
+        log('Answer received (pc_id:'+(ans.pc_id||'?')+')');
+        if (!ans.sdp) throw new Error('No SDP in answer');
+
+        await S.pc.setRemoteDescription(new RTCSessionDescription({type:ans.type||'answer',sdp:ans.sdp}));
+        log('Handshake complete — waiting for data channel...');
+
+    } catch(err) {
+        log('Error: '+err.message,'error');
+        console.error(err);
+        setStatus('Error','error');
+        document.getElementById('startBtn').disabled = false;
+    }
+}
+
+function toggleMute() {
+    if (!S.stream) return;
+    S.muted = !S.muted;
+    S.stream.getAudioTracks().forEach(function(t){ t.enabled=!S.muted; });
+    var btn = document.getElementById('muteBtn');
+    btn.classList.toggle('muted',S.muted);
+    btn.textContent = S.muted ? '\uD83D\uDD07' : '\uD83C\uDFA4';
+    log('Mic '+(S.muted?'muted':'unmuted'));
+}
+
+function disconnect() {
+    if (!S.pc) return;
+    if (S.dc) { try { S.dc.close(); } catch(e){} S.dc = null; }
+    S.pc.close();
+    if (S.stream) S.stream.getTracks().forEach(function(t){ t.stop(); });
+    S.pc = S.stream = null;
+    S.muted = false;
+    S.botMsgId = S.userInterimId = null;
+    setSpeaking(false); setStatus('Idle', 'idle');
+    document.getElementById('agentAvatar').classList.remove('online');
+    document.getElementById('startBtn').disabled=false;
+    document.getElementById('muteBtn').disabled=true;
+    document.getElementById('endBtn').disabled=true;
+    setTextInputEnabled(false);
+    log('Session ended');
+}
+</script>
+</body>
+</html>
