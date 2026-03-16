@@ -25,8 +25,8 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
 from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.services.openai.tts import OpenAITTSService
+from pipecat.services.openai.llm import OpenAILLMService, OpenAILLMSettings
+from pipecat.services.openai.tts import OpenAITTSService, OpenAITTSSettings
 
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.transports.base_transport import TransportParams
@@ -130,13 +130,17 @@ async def _build_pipeline(
 
     llm = OpenAILLMService(
         api_key=settings.openai_api_key,
-        model=_app_config.openai_model,
+        settings=OpenAILLMSettings(
+            model=_app_config.openai_model,
+        ),
     )
 
     tts = OpenAITTSService(
         api_key=settings.openai_api_key,
-        model="tts-1",
-        voice=_app_config.tts_voice,
+        settings=OpenAITTSSettings(
+            model="tts-1",
+            voice=_app_config.tts_voice,
+        ),
     )
 
     # Use standard RTVIProcessor for data channel management and RTVI protocol.

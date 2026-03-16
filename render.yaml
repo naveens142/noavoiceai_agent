@@ -15,7 +15,7 @@ services:
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python bot_runner.py
     
-    # Environment variables (can also be set in Render dashboard)
+    # Environment variables (non-sensitive; rest set via Render dashboard)
     envVars:
       - key: LOG_LEVEL
         value: INFO
@@ -23,10 +23,17 @@ services:
         value: "20"
       - key: PORT
         value: "7860"
-      
-      # ⚠️  IMPORTANT: Set these SECRETS in Render dashboard, NOT in this file:
-      # - OPENAI_API_KEY (from https://platform.openai.com/api-keys)
-      # - DEEPGRAM_API_KEY (from https://console.deepgram.com/keys)
-      # - API_BASE_URL (your backend API URL)
-      # - API_USERNAME (for backend authentication)
-      # - API_PASSWORD (for backend authentication)
+      - key: HOST
+        value: "0.0.0.0"
+    
+    # ⚠️  REQUIRED: Set these in Render Dashboard → Environment:
+    # - OPENAI_API_KEY (from https://platform.openai.com/api-keys)
+    # - DEEPGRAM_API_KEY (from https://console.deepgram.com/keys)
+    # - API_BASE_URL (your backend API URL)
+    # - API_USERNAME (backend username)
+    # - API_PASSWORD (backend password)
+    #
+    # OPTIONAL: If connections timeout on restrictive networks:
+    # - METERED_TURN_URL (from https://metered.ca, free tier)
+    # - METERED_TURN_USERNAME
+    # - METERED_TURN_CREDENTIAL
