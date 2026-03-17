@@ -66,23 +66,41 @@ active_sessions: dict = {}
 
 # ─── ICE/TURN Server Configuration ─────────────────────────────────────────────
 
-def _get_ice_servers() -> Optional[List[IceServer]]:
-    """Get ICE servers for NAT traversal."""
-    turn_url = os.getenv("METERED_TURN_URL")
-    username  = os.getenv("METERED_TURN_USERNAME")
+# Public STUN servers — always used so the server discovers its public (reflexive) IP.
+# Without these, the server only advertises its private Render IP (10.x.x.x),
+# which is unreachable from the internet → ICE always fails on cloud deployments.
+_STUN_SERVERS = [
+    IceServer(urls="stun:stun.l.google.com:19302"),
+    IceServer(urls="stun:stun1.l.google.com:19302"),
+]
+
+
+def _get_ice_servers() -> List[IceServer]:
+    """
+    Return ICE servers for NAT traversal.
+
+    Always includes public STUN so the server discovers its public IP on cloud
+    deployments (Render, Fly, GCP, etc.).
+
+    If METERED_TURN_* env vars are set, TURN relays are added too.
+    TURN (over TCP/443) is required when the cloud provider blocks UDP
+    (e.g., Render's load-balancer does not forward arbitrary UDP ports).
+    """
+    turn_url   = os.getenv("METERED_TURN_URL")
+    username   = os.getenv("METERED_TURN_USERNAME")
     credential = os.getenv("METERED_TURN_CREDENTIAL")
 
     if not turn_url or not username or not credential:
-        logger.info("No TURN configured — using default STUN")
-        return None
+        logger.info("ICE: using public STUN only (no TURN configured)")
+        return _STUN_SERVERS
 
-    logger.info(f"TURN configured: {turn_url}")
+    logger.info(f"ICE: STUN + TURN configured via {turn_url}")
     return [
-        IceServer(urls="stun:stun.relay.metered.ca:80"),
-        IceServer(urls=f"turn:{turn_url}:80",               username=username, credential=credential),
-        IceServer(urls=f"turn:{turn_url}:80?transport=tcp", username=username, credential=credential),
-        IceServer(urls=f"turn:{turn_url}:443",              username=username, credential=credential),
-        IceServer(urls=f"turns:{turn_url}:443?transport=tcp", username=username, credential=credential),
+        *_STUN_SERVERS,
+        IceServer(urls=f"turn:{turn_url}:80",                  username=username, credential=credential),
+        IceServer(urls=f"turn:{turn_url}:80?transport=tcp",    username=username, credential=credential),
+        IceServer(urls=f"turn:{turn_url}:443",                 username=username, credential=credential),
+        IceServer(urls=f"turns:{turn_url}:443?transport=tcp",  username=username, credential=credential),
     ]
 
 
@@ -100,8 +118,10 @@ _webrtc_handler: Optional[SmallWebRTCRequestHandler] = None
 def get_handler() -> SmallWebRTCRequestHandler:
     global _webrtc_handler
     if _webrtc_handler is None:
+        ice = _get_ice_servers()
+        logger.info(f"WebRTC handler: {len(ice)} ICE server(s) configured")
         _webrtc_handler = SmallWebRTCRequestHandler(
-            ice_servers=_get_ice_servers(),
+            ice_servers=ice,
         )
     return _webrtc_handler
 
