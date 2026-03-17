@@ -61,6 +61,7 @@ MAX_CONCURRENT_BOTS = int(os.getenv("MAX_CONCURRENT_BOTS", "20"))
 PORT               = int(os.getenv("PORT", "7860"))
 HOST               = os.getenv("HOST", "0.0.0.0")
 
+# session_id → {"status": str, "created_at": float, "task": asyncio.Task|None}
 active_sessions: dict = {}
 
 
@@ -70,8 +71,9 @@ active_sessions: dict = {}
 # Without these, the server only advertises its private Render IP (10.x.x.x),
 # which is unreachable from the internet → ICE always fails on cloud deployments.
 _STUN_SERVERS = [
-    IceServer(urls="stun:stun.l.google.com:19302"),
-    IceServer(urls="stun:stun1.l.google.com:19302"),
+    IceServer(urls="stun:stun.relay.metered.ca:80"),  # Metered STUN
+    IceServer(urls="stun:stun.l.google.com:19302"),   # Google STUN (fallback)
+    IceServer(urls="stun:stun1.l.google.com:19302"),  # Google STUN (fallback)
 ]
 
 
@@ -85,22 +87,29 @@ def _get_ice_servers() -> List[IceServer]:
     If METERED_TURN_* env vars are set, TURN relays are added too.
     TURN (over TCP/443) is required when the cloud provider blocks UDP
     (e.g., Render's load-balancer does not forward arbitrary UDP ports).
+    
+    Set SKIP_TURN=1 to disable TURN for local testing (STUN only).
     """
     turn_url   = os.getenv("METERED_TURN_URL")
     username   = os.getenv("METERED_TURN_USERNAME")
     credential = os.getenv("METERED_TURN_CREDENTIAL")
+    skip_turn  = os.getenv("SKIP_TURN", "0") == "1"
 
-    if not turn_url or not username or not credential:
-        logger.info("ICE: using public STUN only (no TURN configured)")
+    if skip_turn or not turn_url or not username or not credential:
+        if skip_turn:
+            logger.info("ICE: SKIP_TURN=1, using STUN only (local testing mode)")
+        else:
+            logger.info("ICE: using STUN only (no TURN configured)")
         return _STUN_SERVERS
 
-    logger.info(f"ICE: STUN + TURN configured via {turn_url}")
+    logger.info(f"ICE: STUN + TURN configured via global.relay.metered.ca (metered.ca)")
     return [
         *_STUN_SERVERS,
-        IceServer(urls=f"turn:{turn_url}:80",                  username=username, credential=credential),
-        IceServer(urls=f"turn:{turn_url}:80?transport=tcp",    username=username, credential=credential),
-        IceServer(urls=f"turn:{turn_url}:443",                 username=username, credential=credential),
-        IceServer(urls=f"turns:{turn_url}:443?transport=tcp",  username=username, credential=credential),
+        # Exact format from metered.ca docs: https://www.metered.ca/
+        IceServer(urls="turn:global.relay.metered.ca:80",                  username=username, credential=credential),
+        IceServer(urls="turn:global.relay.metered.ca:80?transport=tcp",    username=username, credential=credential),
+        IceServer(urls="turn:global.relay.metered.ca:443",                 username=username, credential=credential),
+        IceServer(urls="turns:global.relay.metered.ca:443?transport=tcp",  username=username, credential=credential),
     ]
 
 
@@ -197,6 +206,52 @@ async def health_check():
     })
 
 
+@app.get("/ice-config")
+async def ice_config():
+    """Return current ICE server config — useful for debugging connection failures."""
+    servers = _get_ice_servers()
+    has_turn = any("turn:" in (s.urls if isinstance(s.urls, str) else s.urls[0]) for s in servers)
+    
+    # Serialize ICE servers including username/credential for TURN
+    ice_servers_list = []
+    for s in servers:
+        server_obj = {"urls": s.urls}
+        if s.username:
+            server_obj["username"] = s.username
+        if s.credential:
+            server_obj["credential"] = s.credential
+        ice_servers_list.append(server_obj)
+    
+    return JSONResponse({
+        "ice_servers": ice_servers_list,
+        "has_turn": has_turn,
+        "note": "TURN is required on Render (UDP is blocked). Add METERED_TURN_* env vars if connections fail." if not has_turn else "TURN configured.",
+    })
+
+
+@app.get("/ice-diagnostics")
+async def ice_diagnostics():
+    """Detailed ICE diagnostics for troubleshooting."""
+    return JSONResponse({
+        "environment": {
+            "SKIP_TURN": os.getenv("SKIP_TURN", "0"),
+            "METERED_TURN_URL": "***" if os.getenv("METERED_TURN_URL") else "(not set)",
+            "METERED_TURN_USERNAME": "***" if os.getenv("METERED_TURN_USERNAME") else "(not set)",
+            "METERED_TURN_CREDENTIAL": "***" if os.getenv("METERED_TURN_CREDENTIAL") else "(not set)",
+        },
+        "ice_servers": [
+            {"urls": s.urls, "has_auth": bool(s.username and s.credential)}
+            for s in _get_ice_servers()
+        ],
+        "recommendations": [
+            "If 'has_turn' is false and you're on Render, get TURN credentials from https://metered.ca",
+            "If TURN auth fails, verify credentials are valid at metered.ca dashboard",
+            "For local testing only, set SKIP_TURN=1 to use STUN (Google STUN works locally)",
+            "WebRTC 'failed' after ~15s usually means no ICE candidates could connect",
+        ],
+    })
+
+
 @app.get("/status")
 async def status():
     return JSONResponse({
@@ -253,11 +308,13 @@ async def handle_offer(request: Request, background_tasks: BackgroundTasks) -> J
 
     handler = get_handler()
 
-    # webrtc_connection_callback is called by the handler AFTER the connection
-    # is fully initialized (tracks registered, ICE gathered).  We spawn the bot
-    # pipeline here so it starts AFTER the transport is ready.
+    # Track the session_id registered inside the callback so we can
+    # clean it up if handle_web_request() raises after the callback ran.
+    _registered_session_id: list = []  # mutable container for nonlocal write
+
     async def webrtc_connection_callback(connection: SmallWebRTCConnection):
-        session_id = connection.pc_id
+        sid = connection.pc_id
+        _registered_session_id.append(sid)
 
         transport = SmallWebRTCTransport(
             webrtc_connection=connection,
@@ -268,14 +325,13 @@ async def handle_offer(request: Request, background_tasks: BackgroundTasks) -> J
             ),
         )
 
-        active_sessions[session_id] = {
+        active_sessions[sid] = {
             "status": "running",
             "created_at": asyncio.get_event_loop().time(),
+            "task": None,  # filled in by _run_bot_session once the task starts
         }
-        logger.info(f"[{session_id}] 🤖 Spawning bot task...")
-
-        # Run bot as background task so we don't block the HTTP response
-        background_tasks.add_task(_run_bot_session, transport, session_id)
+        logger.info(f"[{sid}] 🤖 Spawning bot task...")
+        background_tasks.add_task(_run_bot_session, transport, sid)
 
     # handle_web_request() does the full SDP handshake and returns the answer
     try:
@@ -284,6 +340,10 @@ async def handle_offer(request: Request, background_tasks: BackgroundTasks) -> J
             webrtc_connection_callback=webrtc_connection_callback,
         )
     except Exception as exc:
+        # Clean up any session that was registered before the failure
+        for sid in _registered_session_id:
+            active_sessions.pop(sid, None)
+            logger.warning(f"[{sid}] 🧹 Cleaned up session after handshake failure")
         logger.error(f"WebRTC handshake failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -298,9 +358,15 @@ async def handle_offer(request: Request, background_tasks: BackgroundTasks) -> J
 
 async def _run_bot_session(transport: SmallWebRTCTransport, session_id: str) -> None:
     """Run bot pipeline for one session, clean up on exit."""
+    # Store the asyncio Task so stop_bot() can cancel it properly.
+    current_task = asyncio.current_task()
+    if session_id in active_sessions:
+        active_sessions[session_id]["task"] = current_task
     try:
         await bot(transport, session_id)
         logger.info(f"[{session_id}] ✅ Bot session completed normally")
+    except asyncio.CancelledError:
+        logger.info(f"[{session_id}] 🛑 Bot session cancelled")
     except Exception as exc:
         logger.error(f"[{session_id}] ❌ Bot session error: {type(exc).__name__}: {exc}", exc_info=True)
     finally:
@@ -312,10 +378,17 @@ async def _run_bot_session(transport: SmallWebRTCTransport, session_id: str) -> 
 
 @app.post("/stop_bot/{session_id}")
 async def stop_bot(session_id: str) -> JSONResponse:
-    if session_id not in active_sessions:
+    session = active_sessions.get(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-    active_sessions.pop(session_id, None)
-    logger.info(f"[{session_id}] 🛑 Session stopped via API")
+    # Cancel the running asyncio Task — _run_bot_session.finally() removes from active_sessions
+    task: asyncio.Task | None = session.get("task")
+    if task and not task.done():
+        task.cancel()
+        logger.info(f"[{session_id}] 🛑 Session cancelled via API")
+    else:
+        active_sessions.pop(session_id, None)
+        logger.info(f"[{session_id}] 🛑 Session removed via API (task already done)")
     return JSONResponse({"status": "success", "session_id": session_id})
 
 

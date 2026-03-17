@@ -553,9 +553,21 @@ async function startSession() {
         setStatus('Connecting...','connecting');
         log('Starting session...');
 
-        S.pc = new RTCPeerConnection({
-            iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]
-        });
+        // Fetch ICE config from server so client uses the same TURN if configured.
+        // Falls back to Google STUN only if the endpoint is unreachable.
+        var iceServers = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
+        try {
+            var iceCfgResp = await fetch('/ice-config');
+            if (iceCfgResp.ok) {
+                var iceCfg = await iceCfgResp.json();
+                if (iceCfg.ice_servers && iceCfg.ice_servers.length) {
+                    iceServers = iceCfg.ice_servers;
+                    log('ICE config from server: ' + iceServers.length + ' server(s), TURN=' + iceCfg.has_turn);
+                }
+            }
+        } catch(e) { log('ICE config fetch failed, using defaults', 'warn'); }
+
+        S.pc = new RTCPeerConnection({ iceServers: iceServers });
 
         // ── CRITICAL: create data channel BEFORE createOffer() ──────────────
         // The 'rtvi-ai' channel must be in the SDP offer so aiortc (server)

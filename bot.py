@@ -57,6 +57,7 @@ class AppConfig:
 
 
 _app_config: Optional[AppConfig] = None
+_shared_access_token: Optional[str] = None  # reused across sessions to avoid 429 on login
 
 
 # ─── Tool schema builder ──────────────────────────────────────────────────────
@@ -200,6 +201,7 @@ async def _build_pipeline(
 
 async def bot(transport: SmallWebRTCTransport, session_id: str) -> None:
     assert _app_config is not None, "bot() called before initialize_app()"
+    global _shared_access_token
     logger.info("[%s] ═══ SESSION START ═══", session_id)
 
     api_client = APIClient()
@@ -207,7 +209,14 @@ async def bot(transport: SmallWebRTCTransport, session_id: str) -> None:
 
     try:
         await api_client.open()
-        await api_client.login()
+        # Reuse the shared token from startup to avoid hitting API rate limits.
+        # If the token has expired, api_client._make_request() will auto re-login.
+        if _shared_access_token:
+            api_client.access_token = _shared_access_token
+            api_client._apply_auth_header()
+        else:
+            result = await api_client.login()
+            _shared_access_token = api_client.access_token
         booking_tools = BookingTools(api_client)
     except Exception as exc:
         logger.error("[%s] API init failed: %s", session_id, exc)
@@ -229,12 +238,14 @@ async def bot(transport: SmallWebRTCTransport, session_id: str) -> None:
     async def on_client_disconnected(transport, webrtc_connection):
         logger.info("[%s] Client disconnected", session_id)
         await task.cancel()
-        context.set_messages([{"role": "system", "content": _app_config.system_prompt}])
 
     runner = PipelineRunner(handle_sigint=False)
     try:
         await runner.run(task)
     finally:
+        # Update shared token if it was refreshed mid-session (auto-relogin)
+        if api_client.access_token and api_client.access_token != _shared_access_token:
+            _shared_access_token = api_client.access_token
         try:
             await asyncio.wait_for(api_client.close(), timeout=5.0)
         except Exception:
@@ -245,7 +256,7 @@ async def bot(transport: SmallWebRTCTransport, session_id: str) -> None:
 # ─── initialize_app() ─────────────────────────────────────────────────────────
 
 async def initialize_app() -> None:
-    global _app_config
+    global _app_config, _shared_access_token
     validate_settings()
 
     logger.info("═" * 60)
@@ -261,6 +272,7 @@ async def initialize_app() -> None:
     try:
         await startup_client.open()
         await startup_client.login()
+        _shared_access_token = startup_client.access_token  # cache for reuse in bot()
         config_data   = await startup_client.get_agent_config()
         agent_name    = config_data.get("name", agent_name)
         system_prompt = config_data.get("system_prompt", system_prompt)
