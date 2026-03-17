@@ -196,6 +196,23 @@ if os.path.isdir(client_dir):
 
 # ─── Health & status ───────────────────────────────────────────────────────────
 
+@app.get("/")
+async def root():
+    """Root endpoint — returns service info."""
+    return JSONResponse({
+        "service": "Pipecat Bot Runner",
+        "transport": "SmallWebRTC (peer-to-peer)",
+        "status": "running",
+        "endpoints": {
+            "health": "/health",
+            "ice-config": "/ice-config",
+            "ice-diagnostics": "/ice-diagnostics",
+            "offer": "/offer",
+            "client": "/static/webrtc-client.html",
+        }
+    })
+
+
 @app.get("/health")
 async def health_check():
     return JSONResponse({
